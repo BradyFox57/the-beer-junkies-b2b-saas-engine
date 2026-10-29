@@ -1,0 +1,54 @@
+{
+    "metadata": {
+        "scraped_at_utc": "2026-10-23T23:51:24.031892+00:00",
+        "source_url": "https://www.fulldistancebrewing.com/s/order",
+        "region_market": "Stafford / Fredericksburg VA",
+        "venue_name": "Full Distance Brewing (Stafford, VA)"
+    },
+    "menu_items": [
+        {
+            "item_id": "135e1d4f-184b-4581-9e0f-7b388a111db8",
+            "product_name": "Yucatan Sunrise Mexican Lager",
+            "style_declared": "Mexican Lager",
+            "price_listed": 7.0,
+            "serving_size_oz": 16.0,
+            "abv": null,
+            "ibu": null,
+            "description_raw": "Clean, crisp lager brewed for warm weather.",
+            "availability_status": "ON_TAP"
+        },
+        {
+            "item_id": "76f36be5-a2a7-45df-81b8-ec7ea8a1d18c",
+            "product_name": "Watt Masher American IPA",
+            "style_declared": "American IPA",
+            "price_listed": 8.0,
+            "serving_size_oz": 16.0,
+            "abv": null,
+            "ibu": null,
+            "description_raw": "Classic West Coast profile with assertive bitterness.",
+            "availability_status": "ON_TAP"
+        },
+        {
+            "item_id": "224c15a9-69b8-4ae8-bfea-7b734fba185f",
+            "product_name": "Barbarian Invasion",
+            "style_declared": "Hazy IPA / NEIPA",
+            "price_listed": 8.5,
+            "serving_size_oz": 16.0,
+            "abv": null,
+            "ibu": null,
+            "description_raw": "Heavy tropical fruit notes with minimal bitterness.",
+            "availability_status": "ON_TAP"
+        },
+        {
+            "item_id": "8079d353-bcaf-4571-8c35-2bc7d015b8c2",
+            "product_name": "Hefe is the Crown",
+            "style_declared": "Hefeweizen",
+            "price_listed": 7.5,
+            "serving_size_oz": 16.0,
+            "abv": null,
+            "ibu": null,
+            "description_raw": "Traditional German wheat beer with banana and clove notes.",
+            "availability_status": "ON_TAP"
+        }
+    ]
+}

@@ -1,0 +1,20 @@
+# Local Environment Secrets (CRITICAL)
+.env
+*.env
+env.txt
+secrets.json
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python Caching & Compiled Files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Operating System Files
+.DS_Store
+Thumbs.db
