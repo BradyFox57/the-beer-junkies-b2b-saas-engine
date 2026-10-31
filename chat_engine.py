@@ -2,29 +2,31 @@ import os
 import json
 from flask import Flask, request, jsonify
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
 from anthropic import Anthropic
 
 # Initialize Flask App Server Layer
 app = Flask(__name__)
 
 # =========================================================================
-# LIVE CLOUD HANDSHAKE LAYER (Safe Initialization Block)
+# LIVE CLOUD HANDSHAKE LAYER (Adaptive Key Block)
 # =========================================================================
 url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_KEY")
 anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
 
-# Safety Intercept: Prevent the script from calling create_client if variables are completely blank
+# Safety Fallback: Provide template parameters if Render runs a pre-compilation test
 if not url or not key:
-    print("\n🚨 CRITICAL CONFIGURATION FAULT DETECTED!")
-    print(f"↳ SUPABASE_URL detected: {'FOUND' if url else 'MISSING (BLANK)'}")
-    print(f"↳ SUPABASE_KEY detected: {'FOUND' if key else 'MISSING (BLANK)'}")
-    print("Execution halted safely before client crash initialization.\n")
-    # Provide placeholders to allow Render's pre-compilation layer to finish building
-    url = "https://supabase.co"
-    key = "placeholder-key"
+    url = "https://placeholder-project.supabase.co"
+    key = "sb_secret_placeholder"
 
-supabase: Client = create_client(url, key)
+# Initialize Client Options explicitly to handle new `sb_secret_` key parsing architectures
+opts = ClientOptions(
+    headers={"apiKey": key, "Authorization": f"Bearer {key}"}
+)
+
+# Build pristine safe connections
+supabase: Client = create_client(url, key, options=opts)
 client = Anthropic(api_key=anthropic_key if anthropic_key else "placeholder-key")
 
 @app.route('/ai-query', methods=['POST'])
@@ -37,7 +39,7 @@ def handle_brewery_chat():
         brewery_id = payload.get('brewery_id')
         user_query = payload.get('user_prompt')
         retail_pint_price = float(payload.get("retail_pint_price", 7.00))
-        target_margin_floor = float(payload.get("target_margin_floor", 0.92)) # Defends the 90-95% floor
+        target_margin_floor = float(payload.get("target_margin_floor", 0.92))
         
         print(f"\n📥 INCOMING REQUEST INTERCEPTED! Row ID: {row_id}")
 
@@ -45,14 +47,11 @@ def handle_brewery_chat():
             return jsonify({"status": "ignored", "reason": "Empty user prompt text"}), 400
 
         # =========================================================================
-        # REAL-TIME DYNAMIC DATA EXTRACTION (Runs on every request, never stale)
+        # REAL-TIME DYNAMIC DATA EXTRACTION 
         # =========================================================================
-        
-        # Pull live warehouse inventory metrics
         inv_res = supabase.table("inventory_ingredients").select("*").execute()
         raw_inv = inv_res.data
         
-        # Pull live sales velocity data to locate top-selling profiles
         sales_res = supabase.table("sales_velocity").select("recipe_id, volume_oz_depleted").execute()
         velocity_tracker = {}
         for record in sales_res.data:
@@ -61,11 +60,9 @@ def handle_brewery_chat():
         
         top_recipe_id = max(velocity_tracker, key=velocity_tracker.get) if velocity_tracker else None
 
-        # Pull recipe structures and cross-join Bill of Materials names
         bom_res = supabase.table("recipe_ingredients_bom").select("*, inventory_ingredients(ingredient_name, category)").execute()
         raw_bom = bom_res.data
 
-        # Assemble clean context string for Claude
         inventory_context = ""
         for item in raw_inv:
             stk = item.get('current_stock_lbs') or item.get('on_hand_lbs', 0)
@@ -74,7 +71,7 @@ def handle_brewery_chat():
             inventory_context += f"- {name} ({item['category']}): {stk} lbs @ ${cst}/lb\n"
 
         # =========================================================================
-        # CONSTRUCT REFRESHED SYSTEM PROMPT & CALCULATE ALGORITHMIC MARGIN LIMITS
+        # CONSTRUCT SYSTEM PROMPT & CALCULATE ALGORITHMIC MARGIN LIMITS
         # =========================================================================
         rev_per_bbl = 248 * retail_pint_price
         max_cost_per_bbl = rev_per_bbl * (1.0 - target_margin_floor)
@@ -122,7 +119,6 @@ INSTRUCTIONS:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
-    # Render or Railway injects an environment variable called PORT. We listen on it automatically.
     production_port = int(os.environ.get("PORT", 5000))
     print(f"\n🚀 JUNKIEANALYTICS ENGINE STARTING ON PORT {production_port}")
     app.run(host='0.0.0.0', port=production_port)
