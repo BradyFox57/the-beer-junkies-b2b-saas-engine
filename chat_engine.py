@@ -19,13 +19,12 @@ anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
 
 # Safety Fallback: Provide template parameters if Render runs a pre-compilation test
 if not url or not key:
-    url = "https://placeholder-project.supabase.co"
+    url = "https://supabase.co"
     key = "sb_secret_placeholder"
 
-# 1. Force the client options mapping array structure manually
+# 1. Force the client options mapping array structure manually (Removed 'is_async')
 opts = ClientOptions(
-    headers={"apiKey": key, "Authorization": f"Bearer {key}"},
-    is_async=False
+    headers={"apiKey": key, "Authorization": f"Bearer {key}"}
 )
 
 # 2. Instantiate SyncClient directly to drop the broken validation checks entirely
