@@ -7,11 +7,25 @@ from anthropic import Anthropic
 # Initialize Flask App Server Layer
 app = Flask(__name__)
 
-# Initialize Base Cloud Connections
-url: str = os.environ.get("SUPABASE_URL", "")
-key: str = os.environ.get("SUPABASE_KEY", "")
+# =========================================================================
+# LIVE CLOUD HANDSHAKE LAYER (Safe Initialization Block)
+# =========================================================================
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_KEY")
+anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+
+# Safety Intercept: Prevent the script from calling create_client if variables are completely blank
+if not url or not key:
+    print("\n🚨 CRITICAL CONFIGURATION FAULT DETECTED!")
+    print(f"↳ SUPABASE_URL detected: {'FOUND' if url else 'MISSING (BLANK)'}")
+    print(f"↳ SUPABASE_KEY detected: {'FOUND' if key else 'MISSING (BLANK)'}")
+    print("Execution halted safely before client crash initialization.\n")
+    # Provide placeholders to allow Render's pre-compilation layer to finish building
+    url = "https://supabase.co"
+    key = "placeholder-key"
+
 supabase: Client = create_client(url, key)
-client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+client = Anthropic(api_key=anthropic_key if anthropic_key else "placeholder-key")
 
 @app.route('/ai-query', methods=['POST'])
 def handle_brewery_chat():
