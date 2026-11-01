@@ -53,14 +53,18 @@ def handle_brewery_chat():
         # =========================================================================
         # REAL-TIME DYNAMIC DATA EXTRACTION 
         # =========================================================================
+        
+        # Pull live warehouse inventory metrics
         inv_response = db_session.get(f"{SUPABASE_URL}/rest/v1/inventory_ingredients?select=*")
         inv_response.raise_for_status()
         raw_inv = inv_response.json()
         
+        # Pull live sales velocity data using your exact table headers
         sales_response = db_session.get(f"{SUPABASE_URL}/rest/v1/sales_velocity?select=product_name,quantity_sold")
         sales_response.raise_for_status()
         raw_sales = sales_response.json()
         
+        # Aggregate top selling items by product_name
         velocity_tracker = {}
         for record in raw_sales:
             p_name = record.get("product_name")
@@ -70,20 +74,24 @@ def handle_brewery_chat():
         
         top_product_name = max(velocity_tracker, key=velocity_tracker.get) if velocity_tracker else None
 
+        # Fetch all recipes to find the one matching our top product name
         recipes_response = db_session.get(f"{SUPABASE_URL}/rest/v1/product_recipes?select=*")
         recipes_response.raise_for_status()
         raw_recipes = recipes_response.json()
 
+        # Find the recipe_id corresponding to our top-selling product name
         top_recipe_id = None
-        for recipe in raw_recipes:
-            if top_product_name and top_product_name.lower() in recipe.get("name", "").lower():
-                top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
-                break
-        
-        if not top_recipe_id and raw_recipes:
-            first_recipe = raw_recipes if isinstance(raw_recipes, list) and len(raw_recipes) > 0 else {}
-            top_recipe_id = first_recipe.get("id") or first_recipe.get("recipe_id")
+        if isinstance(raw_recipes, list):
+            for recipe in raw_recipes:
+                if top_product_name and top_product_name.lower() in recipe.get("name", "").lower():
+                    top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
+                    break
+            
+            # Safe Fallback: if no direct name match is caught, take the first entry safely
+            if not top_recipe_id and len(raw_recipes) > 0:
+                top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
 
+        # Pull recipe structures and cross-join Bill of Materials names
         bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
         bom_response.raise_for_status()
         raw_bom = bom_response.json()
