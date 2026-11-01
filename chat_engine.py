@@ -161,10 +161,11 @@ INSTRUCTIONS:
 
         print(f"📤 CLAUDE LOGIC EXECUTED. Writing analysis back to Supabase...")
 
-        # 3. Securely update your live chat_events row with Claude's calculation
+                # 3. Securely update your live chat_events row with Claude's calculation
         update_response = db_session.patch(
             f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}",
-            json={"ai_response": ai_text_response}
+            json={"ai_response": ai_text_response},
+            headers={"Prefer": "return=representation"}
         )
         update_response.raise_for_status()
 
