@@ -87,9 +87,10 @@ def handle_brewery_chat():
                     top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
                     break
             
-            # Safe Fallback: if no direct name match is caught, take the first entry safely
+            # Safe Fallback: Extract from the first dictionary object index inside the list safely
             if not top_recipe_id and len(raw_recipes) > 0:
-                top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
+                first_entry = raw_recipes[0]
+                top_recipe_id = first_entry.get("id") or first_entry.get("recipe_id")
 
         # Pull recipe structures and cross-join Bill of Materials names
         bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
