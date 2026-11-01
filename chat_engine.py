@@ -14,7 +14,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip('/')
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
 
-# Establish a persistent connection pool for blistering fast database communication
+# Establish a persistent connection pool with administrative bypass overrides
 db_session = requests.Session()
 db_session.headers.update({
     "apiKey": SUPABASE_KEY,
@@ -51,20 +51,16 @@ def handle_brewery_chat():
             return jsonify({"status": "ignored", "reason": "Empty user prompt text"}), 400
 
         # =========================================================================
-        # REAL-TIME DYNAMIC DATA EXTRACTION (Aligned with your sales_velocity table)
+        # REAL-TIME DYNAMIC DATA EXTRACTION 
         # =========================================================================
-        
-        # Pull live warehouse inventory metrics
         inv_response = db_session.get(f"{SUPABASE_URL}/rest/v1/inventory_ingredients?select=*")
         inv_response.raise_for_status()
         raw_inv = inv_response.json()
         
-        # Pull live sales velocity data using your exact table headers
         sales_response = db_session.get(f"{SUPABASE_URL}/rest/v1/sales_velocity?select=product_name,quantity_sold")
         sales_response.raise_for_status()
         raw_sales = sales_response.json()
         
-        # Aggregate top selling items by product_name
         velocity_tracker = {}
         for record in raw_sales:
             p_name = record.get("product_name")
@@ -74,12 +70,10 @@ def handle_brewery_chat():
         
         top_product_name = max(velocity_tracker, key=velocity_tracker.get) if velocity_tracker else None
 
-        # Fetch all recipes to find the one matching our top product name
         recipes_response = db_session.get(f"{SUPABASE_URL}/rest/v1/product_recipes?select=*")
         recipes_response.raise_for_status()
         raw_recipes = recipes_response.json()
 
-        # Find the recipe_id corresponding to our top-selling product name
         top_recipe_id = None
         for recipe in raw_recipes:
             if top_product_name and top_product_name.lower() in recipe.get("name", "").lower():
@@ -87,16 +81,13 @@ def handle_brewery_chat():
                 break
         
         if not top_recipe_id and raw_recipes:
-            # Fallback if no direct name match is caught
-            first_recipe = raw_recipes[0] if isinstance(raw_recipes, list) and len(raw_recipes) > 0 else {}
+            first_recipe = raw_recipes if isinstance(raw_recipes, list) and len(raw_recipes) > 0 else {}
             top_recipe_id = first_recipe.get("id") or first_recipe.get("recipe_id")
 
-        # Pull recipe structures and cross-join Bill of Materials names
         bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
         bom_response.raise_for_status()
         raw_bom = bom_response.json()
 
-        # Assemble clean context string for Claude's warehouse ledger inventory balances
         inventory_context = ""
         for item in raw_inv:
             stk = item.get('current_stock_lbs') or item.get('on_hand_lbs', 0)
@@ -104,15 +95,12 @@ def handle_brewery_chat():
             name = item.get('ingredient_name') or item.get('name', 'Unknown')
             inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} lbs available @ ${cst}/lb\n"
 
-        # Assemble clean context string for the Bill of Materials (BOM) grocery lists
         bom_context = ""
         for bom in raw_bom:
             ing_info = bom.get('inventory_ingredients') or {}
             ing_name = ing_info.get('ingredient_name') or ing_info.get('name') or 'Unknown Ingredient'
             req_wt = bom.get('required_weight_lbs') or bom.get('weight_lbs', 0)
             stage = bom.get('addition_stage') or bom.get('add_stage', 'Boil')
-            
-            # Formulate structured mapping linking ingredient requirements directly to recipe names
             bom_context += f"↳ Recipe Target: (ID: {bom.get('recipe_id')}) requires {req_wt} lbs of {ing_name} during '{stage}' stage\n"
 
         # =========================================================================
@@ -152,7 +140,6 @@ INSTRUCTIONS:
             messages=[{"role": "user", "content": user_query}]
         )
         
-        # Extract response text content block cleanly while filtering out hidden NoneType values
         ai_text_response = ""
         if hasattr(message, 'content') and message.content:
             for block in message.content:
@@ -161,16 +148,24 @@ INSTRUCTIONS:
 
         print(f"📤 CLAUDE LOGIC EXECUTED. Writing analysis back to Supabase...")
 
-                # 3. Securely update your live chat_events row with Claude's calculation
+        # 3. Explicitly bypass RLS filters using service role headers to clear the cell write
         update_response = db_session.patch(
             f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}",
             json={"ai_response": ai_text_response},
-            headers={"Prefer": "return=representation"}
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Prefer": "return=representation"
+            }
         )
         update_response.raise_for_status()
 
         print(f"✅ SYSTEM LOOP COMPLETE. Row {row_id} updated successfully.")
-        return jsonify({"status": "success", "message": "Supabase row updated dynamically"}), 200
+        return jsonify({
+            "status": "success", 
+            "message": "Supabase row updated dynamically",
+            "ai_response": ai_text_response
+        }), 200
 
     except Exception as e:
         print(f"🚨 Execution layer exception inside network listener: {e}")
