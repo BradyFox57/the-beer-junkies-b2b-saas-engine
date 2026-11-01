@@ -76,6 +76,9 @@ def handle_brewery_chat():
         recipes_response.raise_for_status()
         raw_recipes = recipes_response.json()
 
+        # =========================================================================
+        # FIXED LIST INDEXING FALLBACK FOR RECIPES
+        # =========================================================================
         top_recipe_id = None
         if isinstance(raw_recipes, list) and len(raw_recipes) > 0:
             for recipe in raw_recipes:
@@ -83,7 +86,8 @@ def handle_brewery_chat():
                     top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
                     break
             if not top_recipe_id:
-                top_recipe_id = raw_recipes.get("id") or raw_recipes.get("recipe_id")
+                # FIX: Access the first element of the list array safely
+                top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
 
         bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
         bom_response.raise_for_status()
@@ -131,7 +135,7 @@ INSTRUCTIONS:
 - Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
 """
 
-        # 2. Run Claude processing pipeline (Reverted to your custom working version)
+        # 2. Run Claude processing pipeline
         message = client.messages.create(
             model="claude-sonnet-5-5", 
             max_tokens=2500,
