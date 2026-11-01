@@ -89,12 +89,16 @@ def handle_brewery_chat():
         bom_response.raise_for_status()
         raw_bom = bom_response.json()
 
+        # =========================================================================
+        # REFACTORED INVENTORY MATRIX READING WITH FLEXIBLE UOM SUPPORT
+        # =========================================================================
         inventory_context = ""
         for item in raw_inv:
-            stk = item.get('current_stock_lbs') or item.get('on_hand_lbs', 0)
-            cst = item.get('unit_cost_per_lb') or item.get('cost_per_lb', 0)
+            stk = item.get('current_stock') or item.get('on_hand', 0)
+            cst = item.get('unit_cost') or item.get('cost', 0)
+            uom = item.get('unit_of_measure', 'lbs')  # Defaults to lbs if not specified
             name = item.get('ingredient_name') or item.get('name', 'Unknown')
-            inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} lbs available @ ${cst}/lb\n"
+            inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} {uom} available @ ${cst}/{uom}\n"
 
         bom_context = ""
         for bom in raw_bom:
@@ -123,13 +127,13 @@ CONFIGURED RECIPE BILL OF MATERIALS (BOM) REQUIREMENTS:
 INSTRUCTIONS:
 - You must mathematically cross-reference the user's target recipe requirements against your live warehouse balances.
 - If the required weight for any ingredient exceeds the available stock balance, you MUST issue a definitive 'FAIL' analysis.
-- Proactively call out shortfalls down to the exact pound.
+- Proactively call out shortfalls down to the exact metric unit provided.
 - Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
 """
 
         # 2. Run Claude 3.5 Sonnet processing pipeline
         message = client.messages.create(
-            model="claude-sonnet-5-5",
+            model="claude-3-5-sonnet-20241022", # Updated to official engine naming convention
             max_tokens=2500,
             system=dynamic_system_prompt,
             messages=[{"role": "user", "content": user_query}]
