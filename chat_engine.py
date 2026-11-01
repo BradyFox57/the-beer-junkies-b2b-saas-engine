@@ -54,11 +54,18 @@ def handle_brewery_chat():
         # REAL-TIME DYNAMIC DATA EXTRACTION 
         # =========================================================================
         
-        # Pull live warehouse inventory metrics (Using your clean new schema layout)
+        # Pull live warehouse inventory metrics (Your clean new schema layout)
         inv_response = db_session.get(f"{SUPABASE_URL}/rest/v1/inventory_ingredients?select=*")
         inv_response.raise_for_status()
         raw_inv = inv_response.json()
         
+        # Build an easy dictionary lookup map of our ingredients to bypass buggy foreign key lookups
+        inventory_lookup = {}
+        for item in raw_inv:
+            ing_id = item.get('id') or item.get('ingredient_id')
+            if ing_id:
+                inventory_lookup[ing_id] = item
+
         # Pull live sales velocity data
         sales_response = db_session.get(f"{SUPABASE_URL}/rest/v1/sales_velocity?select=product_name,quantity_sold")
         sales_response.raise_for_status()
@@ -89,24 +96,27 @@ def handle_brewery_chat():
             if not top_recipe_id and len(raw_recipes) > 0:
                 top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
 
-        # Pull recipe structures and cross-join Bill of Materials names
-        bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(*)")
+        # Pull recipe structures directly without fragile SDK joins
+        bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*")
         bom_response.raise_for_status()
         raw_bom = bom_response.json()
 
         # Assemble clean context string mapping your exact newly updated columns
         inventory_context = ""
         for item in raw_inv:
-            stk = item.get('current_stock', 0)  # Clean Column 1
-            cst = item.get('unit_cost', 0)      # Clean Column 2
-            uom = item.get('unit_of_measure', 'lbs')  # Clean Column 3 (New measure anchor)
+            stk = item.get('current_stock', 0)
+            cst = item.get('unit_cost', 0)
+            uom = item.get('unit_of_measure', 'lbs')
             name = item.get('ingredient_name') or item.get('name', 'Unknown')
             inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} {uom} available @ ${cst}/{uom}\n"
 
+        # Map recipe weights cleanly using our robust local dictionary map
         bom_context = ""
         for bom in raw_bom:
-            ing_info = bom.get('inventory_ingredients') or {}
-            ing_name = ing_info.get('ingredient_name') or ing_info.get('name') or 'Unknown Ingredient'
+            target_ing_id = bom.get('ingredient_id')
+            ing_info = inventory_lookup.get(target_ing_id, {})
+            
+            ing_name = ing_info.get('ingredient_name') or ing_info.get('name') or bom.get('ingredient_name', 'Unknown Ingredient')
             req_wt = bom.get('required_weight_lbs') or bom.get('weight_lbs', 0)
             stage = bom.get('addition_stage') or bom.get('add_stage', 'Boil')
             bom_context += f"↳ Recipe Target: (ID: {bom.get('recipe_id')}) requires {req_wt} lbs of {ing_name} during '{stage}' stage\n"
