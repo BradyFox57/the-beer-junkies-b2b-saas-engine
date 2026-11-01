@@ -25,6 +25,14 @@ db_session.headers.update({
 
 client = Anthropic(api_key=anthropic_key if anthropic_key else "placeholder-key")
 
+@app.route('/', methods=['GET'])
+def server_home():
+    return jsonify({
+        "status": "online",
+        "message": "JunkieAnalytics-OS Sales Velocity Engine Live",
+        "target_endpoint": "https://onrender.com"
+    }), 200
+
 @app.route('/ai-query', methods=['POST'])
 def handle_brewery_chat():
     """Dynamically pulls real-time database snapshots via PostgREST, executes Claude, and writes to Supabase."""
@@ -43,7 +51,7 @@ def handle_brewery_chat():
             return jsonify({"status": "ignored", "reason": "Empty user prompt text"}), 400
 
         # =========================================================================
-        # REAL-TIME DYNAMIC DATA EXTRACTION (Bypassing SDK constraints via REST)
+        # REAL-TIME DYNAMIC DATA EXTRACTION (Aligned with your sales_velocity table)
         # =========================================================================
         
         # Pull live warehouse inventory metrics
@@ -51,17 +59,36 @@ def handle_brewery_chat():
         inv_response.raise_for_status()
         raw_inv = inv_response.json()
         
-        # Pull live sales velocity data to locate top-selling profiles
-        sales_response = db_session.get(f"{SUPABASE_URL}/rest/v1/sales_velocity?select=recipe_id,volume_oz_depleted")
+        # Pull live sales velocity data using your exact table headers
+        sales_response = db_session.get(f"{SUPABASE_URL}/rest/v1/sales_velocity?select=product_name,quantity_sold")
         sales_response.raise_for_status()
         raw_sales = sales_response.json()
         
+        # Aggregate top selling items by product_name
         velocity_tracker = {}
         for record in raw_sales:
-            r_id = record["recipe_id"]
-            velocity_tracker[r_id] = velocity_tracker.get(r_id, 0) + float(record["volume_oz_depleted"])
+            p_name = record.get("product_name")
+            qty = float(record.get("quantity_sold") or 0)
+            if p_name:
+                velocity_tracker[p_name] = velocity_tracker.get(p_name, 0) + qty
         
-        top_recipe_id = max(velocity_tracker, key=velocity_tracker.get) if velocity_tracker else None
+        top_product_name = max(velocity_tracker, key=velocity_tracker.get) if velocity_tracker else None
+
+        # Fetch all recipes to find the one matching our top product name
+        recipes_response = db_session.get(f"{SUPABASE_URL}/rest/v1/product_recipes?select=*")
+        recipes_response.raise_for_status()
+        raw_recipes = recipes_response.json()
+
+        # Find the recipe_id corresponding to our top-selling product name
+        top_recipe_id = None
+        for recipe in raw_recipes:
+            # Assumes name column matches product name or fallback to first entry
+            if top_product_name and top_product_name.lower() in recipe.get("name", "").lower():
+                top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
+                break
+        
+        if not top_recipe_id and raw_recipes:
+            top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
 
         # Pull recipe structures and cross-join Bill of Materials names
         bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
