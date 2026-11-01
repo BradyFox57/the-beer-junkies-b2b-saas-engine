@@ -129,7 +129,7 @@ INSTRUCTIONS:
 
         # 2. Run Claude 3.5 Sonnet processing pipeline
         message = client.messages.create(
-            model="claude-3-sonnet-20240229",
+            model="claude-3-5-sonnet-latest",
             max_tokens=2500,
             system=dynamic_system_prompt,
             messages=[{"role": "user", "content": user_query}]
