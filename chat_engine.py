@@ -45,7 +45,9 @@ def handle_brewery_chat():
         retail_pint_price = float(payload.get("retail_pint_price", 7.00))
         target_margin_floor = float(payload.get("target_margin_floor", 0.92))
         
-        print(f"\n📥 INCOMING REQUEST INTERCEPTED! Row ID target parsed: {row_id}")
+        print(f"\n📥 INCOMING REQUEST INTERCEPTED!")
+        print(f"↳ Row ID parsed: '{row_id}' (Type: {type(row_id).__name__})")
+        print(f"↳ Brewery ID: '{brewery_id}'")
 
         if not user_query:
             return jsonify({"status": "ignored", "reason": "Empty user prompt text"}), 400
@@ -53,25 +55,14 @@ def handle_brewery_chat():
         # =========================================================================
         # REAL-TIME DYNAMIC DATA EXTRACTION 
         # =========================================================================
-        
-        # Pull live warehouse inventory metrics (Using your clean new layout schema)
         inv_response = db_session.get(f"{SUPABASE_URL}/rest/v1/inventory_ingredients?select=*")
         inv_response.raise_for_status()
         raw_inv = inv_response.json()
         
-        # Build an easy dictionary lookup map of our ingredients to bypass buggy foreign key lookups
-        inventory_lookup = {}
-        for item in raw_inv:
-            ing_id = item.get('id') or item.get('ingredient_id')
-            if ing_id:
-                inventory_lookup[ing_id] = item
-
-        # Pull live sales velocity data using your exact table headers
         sales_response = db_session.get(f"{SUPABASE_URL}/rest/v1/sales_velocity?select=product_name,quantity_sold")
         sales_response.raise_for_status()
         raw_sales = sales_response.json()
         
-        # Aggregate top selling items by product_name
         velocity_tracker = {}
         for record in raw_sales:
             p_name = record.get("product_name")
@@ -81,42 +72,34 @@ def handle_brewery_chat():
         
         top_product_name = max(velocity_tracker, key=velocity_tracker.get) if velocity_tracker else None
 
-        # Fetch all recipes to find the one matching our top product name
         recipes_response = db_session.get(f"{SUPABASE_URL}/rest/v1/product_recipes?select=*")
         recipes_response.raise_for_status()
         raw_recipes = recipes_response.json()
 
-        # Find the recipe_id corresponding to our top-selling product name
         top_recipe_id = None
-        if isinstance(raw_recipes, list):
+        if isinstance(raw_recipes, list) and len(raw_recipes) > 0:
             for recipe in raw_recipes:
                 if top_product_name and top_product_name.lower() in recipe.get("name", "").lower():
                     top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
                     break
-            if not top_recipe_id and len(raw_recipes) > 0:
+            if not top_recipe_id:
                 top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
 
-        # Pull recipe structures directly without fragile SDK joins
-        bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*")
+        bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
         bom_response.raise_for_status()
         raw_bom = bom_response.json()
 
-        # Assemble clean context string mapping your exact newly updated columns
         inventory_context = ""
         for item in raw_inv:
-            stk = item.get('current_stock', 0)
-            cst = item.get('unit_cost', 0)
-            uom = item.get('unit_of_measure', 'lbs')
+            stk = item.get('current_stock') or item.get('on_hand', 0)
+            cst = item.get('unit_cost') or item.get('cost', 0)
             name = item.get('ingredient_name') or item.get('name', 'Unknown')
-            inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} {uom} available @ ${cst}/{uom}\n"
+            inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} lbs available @ ${cst}/lb\n"
 
-        # Map recipe weights cleanly using our robust local dictionary map
         bom_context = ""
         for bom in raw_bom:
-            target_ing_id = bom.get('ingredient_id')
-            ing_info = inventory_lookup.get(target_ing_id, {})
-            
-            ing_name = ing_info.get('ingredient_name') or ing_info.get('name') or bom.get('ingredient_name', 'Unknown Ingredient')
+            ing_info = bom.get('inventory_ingredients') or {}
+            ing_name = ing_info.get('ingredient_name') or ing_info.get('name') or 'Unknown Ingredient'
             req_wt = bom.get('required_weight_lbs') or bom.get('weight_lbs', 0)
             stage = bom.get('addition_stage') or bom.get('add_stage', 'Boil')
             bom_context += f"↳ Recipe Target: (ID: {bom.get('recipe_id')}) requires {req_wt} lbs of {ing_name} during '{stage}' stage\n"
@@ -131,11 +114,6 @@ def handle_brewery_chat():
 You are the Unified Predictive Intelligence engine for JunkieAnalytics-OS.
 You protect an editable {target_margin_floor * 100}% gross margin floor.
 
-FINANCIAL SAFEGUARDS:
-- Retail Price: ${retail_pint_price:.2f} per 16oz pour.
-- Est. Revenue per Barrel (BBL): ${rev_per_bbl:.2f} (248 pints).
-- Maximum Allowable Raw Ingredient Cost per BBL: ${max_cost_per_bbl:.2f}.
-
 LIVE WAREHOUSE INVENTORY BALANCES:
 {inventory_context}
 
@@ -147,7 +125,6 @@ INSTRUCTIONS:
 - If the required weight for any ingredient exceeds the available stock balance, you MUST issue a definitive 'FAIL' analysis.
 - Proactively call out shortfalls down to the exact pound.
 - Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
-- Maintain a data-driven, highly commercial consulting tone. Do not guess; rely entirely on the exact numbers provided.
 """
 
         # 2. Run Claude 3.5 Sonnet processing pipeline
@@ -164,11 +141,14 @@ INSTRUCTIONS:
                 if hasattr(block, 'text') and block.text is not None:
                     ai_text_response += str(block.text)
 
-        print(f"📤 CLAUDE LOGIC EXECUTED. Writing analysis back to Supabase...")
+        print(f"📤 CLAUDE RESPONSE GENERATED! Length: {len(ai_text_response)} characters.")
 
-        # 3. FIXED: Aligned target key filter to point directly to your primary 'uuid' column header name
+        # 3. Explicitly bypass RLS filters using service role headers to clear the cell write
+        url_endpoint = f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}"
+        print(f"⚙️ Attempting Supabase Patch to URL: {url_endpoint}")
+        
         update_response = db_session.patch(
-            f"{SUPABASE_URL}/rest/v1/chat_events?uuid=eq.{row_id}",
+            url_endpoint,
             json={"ai_response": ai_text_response},
             headers={
                 "apikey": SUPABASE_KEY,
@@ -176,6 +156,9 @@ INSTRUCTIONS:
                 "Prefer": "return=representation"
             }
         )
+        
+        print(f"📬 Supabase Response Status Code: {update_response.status_code}")
+        print(f"📬 Supabase Response Body: {update_response.text}")
         update_response.raise_for_status()
 
         print(f"✅ SYSTEM LOOP COMPLETE. Row {row_id} updated successfully.")
