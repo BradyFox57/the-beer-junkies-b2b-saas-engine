@@ -45,7 +45,7 @@ def handle_brewery_chat():
         retail_pint_price = float(payload.get("retail_pint_price", 7.00))
         target_margin_floor = float(payload.get("target_margin_floor", 0.92))
         
-        print(f"\n📥 INCOMING REQUEST INTERCEPTED! Row ID: {row_id}")
+        print(f"\n📥 INCOMING REQUEST INTERCEPTED! Row ID target parsed: {row_id}")
 
         if not user_query:
             return jsonify({"status": "ignored", "reason": "Empty user prompt text"}), 400
@@ -54,7 +54,7 @@ def handle_brewery_chat():
         # REAL-TIME DYNAMIC DATA EXTRACTION 
         # =========================================================================
         
-        # Pull live warehouse inventory metrics (Your clean new schema layout)
+        # Pull live warehouse inventory metrics (Using your clean new layout schema)
         inv_response = db_session.get(f"{SUPABASE_URL}/rest/v1/inventory_ingredients?select=*")
         inv_response.raise_for_status()
         raw_inv = inv_response.json()
@@ -66,7 +66,7 @@ def handle_brewery_chat():
             if ing_id:
                 inventory_lookup[ing_id] = item
 
-        # Pull live sales velocity data
+        # Pull live sales velocity data using your exact table headers
         sales_response = db_session.get(f"{SUPABASE_URL}/rest/v1/sales_velocity?select=product_name,quantity_sold")
         sales_response.raise_for_status()
         raw_sales = sales_response.json()
@@ -145,7 +145,7 @@ CONFIGURED RECIPE BILL OF MATERIALS (BOM) REQUIREMENTS:
 INSTRUCTIONS:
 - You must mathematically cross-reference the user's target recipe requirements against your live warehouse balances.
 - If the required weight for any ingredient exceeds the available stock balance, you MUST issue a definitive 'FAIL' analysis.
-- Proactively call out shortfalls down to the exact metric unit requested.
+- Proactively call out shortfalls down to the exact pound.
 - Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
 - Maintain a data-driven, highly commercial consulting tone. Do not guess; rely entirely on the exact numbers provided.
 """
@@ -166,9 +166,9 @@ INSTRUCTIONS:
 
         print(f"📤 CLAUDE LOGIC EXECUTED. Writing analysis back to Supabase...")
 
-        # 3. Explicitly bypass RLS filters using service role headers to clear the cell write
+        # 3. FIXED: Aligned target key filter to point directly to your primary 'uuid' column header name
         update_response = db_session.patch(
-            f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}",
+            f"{SUPABASE_URL}/rest/v1/chat_events?uuid=eq.{row_id}",
             json={"ai_response": ai_text_response},
             headers={
                 "apikey": SUPABASE_KEY,
