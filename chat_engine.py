@@ -1,172 +1,118 @@
 import os
-import json
-import requests
 from flask import Flask, request, jsonify
+from supabase import create_client, Client
 from anthropic import Anthropic
 
 # Initialize Flask App Server Layer
 app = Flask(__name__)
 
-# =========================================================================
-# LIVE CLOUD HANDSHAKE LAYER (Native Production HTTP Strategy)
-# =========================================================================
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip('/')
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+# Initialize Base Cloud Connections (Using your exact original layout)
+url: str = os.environ.get("SUPABASE_URL", "")
+key: str = os.environ.get("SUPABASE_KEY", "")
+supabase: Client = create_client(url, key)
+client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-# Establish a persistent connection pool with administrative bypass overrides
-db_session = requests.Session()
-db_session.headers.update({
-    "apiKey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation"
-})
-
-client = Anthropic(api_key=anthropic_key if anthropic_key else "placeholder-key")
-
-@app.route('/', methods=['GET'])
-def server_home():
-    return jsonify({
-        "status": "online",
-        "message": "JunkieAnalytics-OS Sales Velocity Engine Live",
-        "target_endpoint": "https://onrender.com"
-    }), 200
+def compile_deep_erp_context() -> str:
+    """Queries all tables using your exact original logic, updated for your clean column names."""
+    try:
+        # 1. Pull active warehouse balances
+        inv_res = supabase.table("inventory_ingredients").select("*").execute()
+        raw_inv = inv_res.data
+        
+        # CHANGED: Swapped old column names for 'current_stock' and 'unit_cost'
+        total_val = sum(float(item.get('current_stock', 0)) * float(item.get('unit_cost', 0)) for item in raw_inv)
+        
+        # 2. Pull active recipe names
+        recipe_res = supabase.table("product_recipes").select("*").execute()
+        raw_recipes = recipe_res.data
+        
+        # 3. Pull deep Bill of Materials weights linked to ingredient names
+        bom_res = supabase.table("recipe_ingredients_bom").select("*, inventory_ingredients(ingredient_name)").execute()
+        raw_bom = bom_res.data
+        
+        # 4. Pull industry market trend metrics
+        macro_res = supabase.table("industry_macro_trends").select("*").execute()
+        raw_macro = macro_res.data
+        
+        context = f"=== SYSTEM DATA REAL-TIME SNAPSHOT ===\n\n"
+        context += f"INTERNAL WAREHOUSE LEDGER (Valuation: ${total_val:,.2f}):\n"
+        for item in raw_inv:
+            stk = item.get('current_stock', 0)
+            cst = item.get('unit_cost', 0)
+            uom = item.get('unit_of_measure', 'lbs')
+            context += f"- {item.get('ingredient_name', 'Unknown')} ({item.get('category', 'Unknown')}): {stk} {uom} @ ${cst}/{uom}\n"
+            
+        context += f"\nCONFIGURED BRAND RECIPES (Active Bill of Materials):\n"
+        for item in raw_recipes:
+            context += f"\nBeer Style: {item.get('beer_style', 'Unknown')} | Standard Turn Size: {item.get('batch_size_bbl', 0)} BBL\n"
+            context += "Ingredient Weights:\n"
+            for bom in raw_bom:
+                if bom.get('recipe_id') == item.get('recipe_id'):
+                    ing_data = bom.get('inventory_ingredients', {})
+                    ing_name = ing_data.get('ingredient_name') if ing_data else "Unknown"
+                    context += f"  ↳ {ing_name}: {bom.get('required_weight_lbs', 0)} lbs during {bom.get('addition_stage', 'Boil')}\n"
+            
+        context += f"\nMACRO INDUSTRY TRAJECTORY DATA (National Market Trends):\n"
+        for item in raw_macro:
+            context += f"- Style: {item.get('beverage_style', 'Unknown')} | YoY Growth: {item.get('national_growth_rate_yoy', 0)}% | Index: {item.get('consumer_demand_index', 0)}\n"
+            
+        return context
+    except Exception as e:
+        print(f"Systems context assembly failure: {e}")
+        return "Operational context stream momentarily offline."
 
 @app.route('/ai-query', methods=['POST'])
 def handle_brewery_chat():
-    """Dynamically pulls real-time database snapshots via PostgREST, executes Claude, and writes to Supabase."""
+    """Intercept live requests from Make.com, query Claude, and write results back to Supabase."""
     try:
-        # 1. Parse incoming payload from the Make.com webhook link
+        # 1. Parse incoming payload from the Make.com HTTP link
         payload = request.json or {}
         row_id = payload.get('id')
-        brewery_id = payload.get('brewery_id')
         user_query = payload.get('user_prompt')
-        retail_pint_price = float(payload.get("retail_pint_price", 7.00))
-        target_margin_floor = float(payload.get("target_margin_floor", 0.92))
         
-        print(f"\n📥 INCOMING REQUEST INTERCEPTED!")
-        print(f"↳ Row ID parsed: '{row_id}' (Type: {type(row_id).__name__})")
-        print(f"↳ Brewery ID: '{brewery_id}'")
+        print(f"\n📥 INCOMING REQUEST INTERCEPTED! Row ID: {row_id}")
 
         if not user_query:
             return jsonify({"status": "ignored", "reason": "Empty user prompt text"}), 400
 
-        # =========================================================================
-        # REAL-TIME DYNAMIC DATA EXTRACTION 
-        # =========================================================================
-        inv_response = db_session.get(f"{SUPABASE_URL}/rest/v1/inventory_ingredients?select=*")
-        inv_response.raise_for_status()
-        raw_inv = inv_response.json()
-        
-        sales_response = db_session.get(f"{SUPABASE_URL}/rest/v1/sales_velocity?select=product_name,quantity_sold")
-        sales_response.raise_for_status()
-        raw_sales = sales_response.json()
-        
-        velocity_tracker = {}
-        for record in raw_sales:
-            p_name = record.get("product_name")
-            qty = float(record.get("quantity_sold") or 0)
-            if p_name:
-                velocity_tracker[p_name] = velocity_tracker.get(p_name, 0) + qty
-        
-        top_product_name = max(velocity_tracker, key=velocity_tracker.get) if velocity_tracker else None
+        # Compile Unified Prompt Engine Context dynamically
+        unified_system_context = compile_deep_erp_context()
 
-        recipes_response = db_session.get(f"{SUPABASE_URL}/rest/v1/product_recipes?select=*")
-        recipes_response.raise_for_status()
-        raw_recipes = recipes_response.json()
+        system_prompt = f"""
+You are the Unified Predictive Intelligence & Production Strategy Bot for Barley Naked Brewing Company.
+You track warehouse inventories, brand recipes with full BOM weights, and macro market trends.
 
-        top_recipe_id = None
-        if isinstance(raw_recipes, list) and len(raw_recipes) > 0:
-            for recipe in raw_recipes:
-                if top_product_name and top_product_name.lower() in recipe.get("name", "").lower():
-                    top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
-                    break
-            if not top_recipe_id:
-                top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
+{unified_system_context}
 
-        bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
-        bom_response.raise_for_status()
-        raw_bom = bom_response.json()
-
-        inventory_context = ""
-        for item in raw_inv:
-            stk = item.get('current_stock') or item.get('on_hand', 0)
-            cst = item.get('unit_cost') or item.get('cost', 0)
-            name = item.get('ingredient_name') or item.get('name', 'Unknown')
-            inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} lbs available @ ${cst}/lb\n"
-
-        bom_context = ""
-        for bom in raw_bom:
-            ing_info = bom.get('inventory_ingredients') or {}
-            ing_name = ing_info.get('ingredient_name') or ing_info.get('name') or 'Unknown Ingredient'
-            req_wt = bom.get('required_weight_lbs') or bom.get('weight_lbs', 0)
-            stage = bom.get('addition_stage') or bom.get('add_stage', 'Boil')
-            bom_context += f"↳ Recipe Target: (ID: {bom.get('recipe_id')}) requires {req_wt} lbs of {ing_name} during '{stage}' stage\n"
-
-        # =========================================================================
-        # CONSTRUCT SYSTEM PROMPT & CALCULATE ALGORITHMIC MARGIN LIMITS
-        # =========================================================================
-        rev_per_bbl = 248 * retail_pint_price
-        max_cost_per_bbl = rev_per_bbl * (1.0 - target_margin_floor)
-
-        dynamic_system_prompt = f"""
-You are the Unified Predictive Intelligence engine for JunkieAnalytics-OS.
-You protect an editable {target_margin_floor * 100}% gross margin floor.
-
-LIVE WAREHOUSE INVENTORY BALANCES:
-{inventory_context}
-
-CONFIGURED RECIPE BILL OF MATERIALS (BOM) REQUIREMENTS:
-{bom_context}
-
-INSTRUCTIONS:
-- You must mathematically cross-reference the user's target recipe requirements against your live warehouse balances.
-- If the required weight for any ingredient exceeds the available stock balance, you MUST issue a definitive 'FAIL' analysis.
+Instructions:
+- Cross-reference exact recipe weights against your stock levels to provide a definitive Pass/Fail analysis for full 7.5 BBL batches.
 - Proactively call out shortfalls down to the exact pound.
-- Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
+- Defend a rigid 75% gross margin floor. Always keep your tone commercial, data-driven, and consultative.
 """
 
-        # 2. Run Claude 3.5 Sonnet processing pipeline
+        # 2. Run your verified Claude processing pipeline
         message = client.messages.create(
             model="claude-sonnet-5-5",
             max_tokens=2500,
-            system=dynamic_system_prompt,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_query}]
         )
         
+        # Extract response text content block cleanly
         ai_text_response = ""
-        if hasattr(message, 'content') and message.content:
-            for block in message.content:
-                if hasattr(block, 'text') and block.text is not None:
-                    ai_text_response += str(block.text)
+        for block in message.content:
+            if hasattr(block, 'text'):
+                ai_text_response += block.text
 
-        print(f"📤 CLAUDE RESPONSE GENERATED! Length: {len(ai_text_response)} characters.")
+        print(f"📤 CLAUDE LOGIC EXECUTED. Writing analysis back to Supabase...")
 
-        # 3. Explicitly bypass RLS filters using service role headers to clear the cell write
-        url_endpoint = f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}"
-        print(f"⚙️ Attempting Supabase Patch to URL: {url_endpoint}")
-        
-        update_response = db_session.patch(
-            url_endpoint,
-            json={"ai_response": ai_text_response},
-            headers={
-                "apikey": SUPABASE_KEY,
-                "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Prefer": "return=representation"
-            }
-        )
-        
-        print(f"📬 Supabase Response Status Code: {update_response.status_code}")
-        print(f"📬 Supabase Response Body: {update_response.text}")
-        update_response.raise_for_status()
+        # 3. Securely update your live chat_events row with Claude's calculation using original SDK logic
+        supabase.table("chat_events").update({
+            "ai_response": ai_text_response
+        }).eq("id", row_id).execute()
 
         print(f"✅ SYSTEM LOOP COMPLETE. Row {row_id} updated successfully.")
-        return jsonify({
-            "status": "success", 
-            "message": "Supabase row updated dynamically",
-            "ai_response": ai_text_response
-        }), 200
+        return jsonify({"status": "success", "message": "Supabase row updated dynamically"}), 200
 
     except Exception as e:
         print(f"🚨 Execution layer exception inside network listener: {e}")
@@ -174,5 +120,4 @@ INSTRUCTIONS:
 
 if __name__ == '__main__':
     production_port = int(os.environ.get("PORT", 5000))
-    print(f"\n🚀 JUNKIEANALYTICS ENGINE STARTING ON PORT {production_port}")
     app.run(host='0.0.0.0', port=production_port)
