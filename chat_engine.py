@@ -135,7 +135,12 @@ INSTRUCTIONS:
             messages=[{"role": "user", "content": user_query}]
         )
         
-        ai_text_response = message.content.text
+               # Extract response text content block cleanly from the list wrapper
+        ai_text_response = ""
+        for block in message.content:
+            if hasattr(block, 'text'):
+                ai_text_response += block.text
+
 
         print(f"📤 CLAUDE LOGIC EXECUTED. Writing analysis back to Supabase...")
 
