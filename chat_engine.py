@@ -76,9 +76,6 @@ def handle_brewery_chat():
         recipes_response.raise_for_status()
         raw_recipes = recipes_response.json()
 
-        # =========================================================================
-        # FIXED ARRAY HANDLING FOR RECIPES
-        # =========================================================================
         top_recipe_id = None
         if isinstance(raw_recipes, list) and len(raw_recipes) > 0:
             for recipe in raw_recipes:
@@ -86,7 +83,7 @@ def handle_brewery_chat():
                     top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
                     break
             if not top_recipe_id:
-                # FIX: Access the first element index [0] safely instead of using .get() on the array list
+                # FIXED: Access the first element index safely using list notation [0]
                 top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
 
         bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
