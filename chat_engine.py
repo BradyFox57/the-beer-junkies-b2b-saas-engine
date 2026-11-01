@@ -135,11 +135,13 @@ INSTRUCTIONS:
             messages=[{"role": "user", "content": user_query}]
         )
         
-               # Extract response text content block cleanly from the list wrapper
+        # Extract response text content block cleanly while filtering out hidden NoneType values
         ai_text_response = ""
-        for block in message.content:
-            if hasattr(block, 'text'):
-                ai_text_response += block.text
+        if hasattr(message, 'content') and message.content:
+            for block in message.content:
+                if hasattr(block, 'text') and block.text is not None:
+                    ai_text_response += str(block.text)
+
 
 
         print(f"📤 CLAUDE LOGIC EXECUTED. Writing analysis back to Supabase...")
