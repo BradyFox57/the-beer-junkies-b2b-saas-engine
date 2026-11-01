@@ -82,26 +82,38 @@ def handle_brewery_chat():
         # Find the recipe_id corresponding to our top-selling product name
         top_recipe_id = None
         for recipe in raw_recipes:
-            # Assumes name column matches product name or fallback to first entry
             if top_product_name and top_product_name.lower() in recipe.get("name", "").lower():
                 top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
                 break
         
         if not top_recipe_id and raw_recipes:
-            top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
+            # Fallback if no direct name match is caught
+            first_recipe = raw_recipes[0] if isinstance(raw_recipes, list) and len(raw_recipes) > 0 else {}
+            top_recipe_id = first_recipe.get("id") or first_recipe.get("recipe_id")
 
         # Pull recipe structures and cross-join Bill of Materials names
         bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
         bom_response.raise_for_status()
         raw_bom = bom_response.json()
 
-        # Assemble clean context string for Claude
+        # Assemble clean context string for Claude's warehouse ledger inventory balances
         inventory_context = ""
         for item in raw_inv:
             stk = item.get('current_stock_lbs') or item.get('on_hand_lbs', 0)
             cst = item.get('unit_cost_per_lb') or item.get('cost_per_lb', 0)
             name = item.get('ingredient_name') or item.get('name', 'Unknown')
-            inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} lbs @ ${cst}/lb\n"
+            inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} lbs available @ ${cst}/lb\n"
+
+        # Assemble clean context string for the Bill of Materials (BOM) grocery lists
+        bom_context = ""
+        for bom in raw_bom:
+            ing_info = bom.get('inventory_ingredients') or {}
+            ing_name = ing_info.get('ingredient_name') or ing_info.get('name') or 'Unknown Ingredient'
+            req_wt = bom.get('required_weight_lbs') or bom.get('weight_lbs', 0)
+            stage = bom.get('addition_stage') or bom.get('add_stage', 'Boil')
+            
+            # Formulate structured mapping linking ingredient requirements directly to recipe names
+            bom_context += f"↳ Recipe Target: (ID: {bom.get('recipe_id')}) requires {req_wt} lbs of {ing_name} during '{stage}' stage\n"
 
         # =========================================================================
         # CONSTRUCT SYSTEM PROMPT & CALCULATE ALGORITHMIC MARGIN LIMITS
@@ -118,13 +130,18 @@ FINANCIAL SAFEGUARDS:
 - Est. Revenue per Barrel (BBL): ${rev_per_bbl:.2f} (248 pints).
 - Maximum Allowable Raw Ingredient Cost per BBL: ${max_cost_per_bbl:.2f}.
 
-LIVE WAREHOUSE INVENTORY STATUS:
+LIVE WAREHOUSE INVENTORY BALANCES:
 {inventory_context}
 
+CONFIGURED RECIPE BILL OF MATERIALS (BOM) REQUIREMENTS:
+{bom_context}
+
 INSTRUCTIONS:
-- Analyze ingredient stock levels against recipes to flag shortfalls down to the exact pound.
-- Generate optimized recipe recommendations that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL.
-- Maintain a data-driven, highly commercial consulting tone.
+- You must mathematically cross-reference the user's target recipe requirements against your live warehouse balances.
+- If the required weight for any ingredient exceeds the available stock balance, you MUST issue a definitive 'FAIL' analysis.
+- Proactively call out shortfalls down to the exact pound.
+- Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
+- Maintain a data-driven, highly commercial consulting tone. Do not guess; rely entirely on the exact numbers provided.
 """
 
         # 2. Run Claude 3.5 Sonnet processing pipeline
@@ -141,8 +158,6 @@ INSTRUCTIONS:
             for block in message.content:
                 if hasattr(block, 'text') and block.text is not None:
                     ai_text_response += str(block.text)
-
-
 
         print(f"📤 CLAUDE LOGIC EXECUTED. Writing analysis back to Supabase...")
 
