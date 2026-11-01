@@ -83,7 +83,7 @@ def handle_brewery_chat():
                     top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
                     break
             if not top_recipe_id:
-                top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
+                top_recipe_id = raw_recipes.get("id") or raw_recipes.get("recipe_id")
 
         bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
         bom_response.raise_for_status()
@@ -96,7 +96,7 @@ def handle_brewery_chat():
         for item in raw_inv:
             stk = item.get('current_stock') or item.get('on_hand', 0)
             cst = item.get('unit_cost') or item.get('cost', 0)
-            uom = item.get('unit_of_measure', 'lbs')  # Defaults to lbs if not specified
+            uom = item.get('unit_of_measure', 'lbs')
             name = item.get('ingredient_name') or item.get('name', 'Unknown')
             inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} {uom} available @ ${cst}/{uom}\n"
 
@@ -131,9 +131,9 @@ INSTRUCTIONS:
 - Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
 """
 
-        # 2. Run Claude 3.5 Sonnet processing pipeline
+        # 2. Run Claude processing pipeline (Reverted to your custom working version)
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241022", # Updated to official engine naming convention
+            model="claude-sonnet-5-5", 
             max_tokens=2500,
             system=dynamic_system_prompt,
             messages=[{"role": "user", "content": user_query}]
