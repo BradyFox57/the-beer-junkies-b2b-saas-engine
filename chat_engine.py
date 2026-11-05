@@ -153,11 +153,27 @@ INSTRUCTIONS:
 - Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
 """
 
+                # Force strict formatting compliance for Claude 5.5 models
         message = client.messages.create(
             model="claude-sonnet-5-5",
             max_tokens=2500,
-            system=dynamic_system_prompt,
-            messages=[{"role": "user", "content": user_query}]
+            system=[
+                {
+                    "type": "text",
+                    "text": dynamic_system_prompt
+                }
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": user_query
+                        }
+                    ]
+                }
+            ]
         )
         
         ai_text_response = ""
