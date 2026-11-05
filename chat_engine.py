@@ -12,23 +12,36 @@ import google.generativeai as genai
 app = Flask(__name__)
 
 # Core Environment Ingestion
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip('/')
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_KEY)
-anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip('/')
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
+# Automated fallback fallback logic to prevent crash states if keys are mixed
+if not SUPABASE_SERVICE_KEY and SUPABASE_KEY:
+    SUPABASE_SERVICE_KEY = SUPABASE_KEY
+
+# SECURE CONSOLE DEBUGGING LABELS (Verifies lengths without exposing strings)
+print(f"\n⚙️ CRITICAL CONNECTOR INGESTION VERIFIER:")
+print(f"↳ SUPABASE_URL length: {len(SUPABASE_URL)} characters")
+print(f"↳ SUPABASE_KEY length: {len(SUPABASE_KEY)} characters")
+print(f"↳ SUPABASE_SERVICE_ROLE_KEY length: {len(SUPABASE_SERVICE_KEY)} characters")
+
+# Validate core configurations before initialization
+if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    print("❌ WARNING: Missing vital database credentials. API boot aborted.")
 
 # Establish a persistent connection pool with administrative bypass overrides
 db_session = requests.Session()
 db_session.headers.update({
-    "apiKey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "apiKey": SUPABASE_KEY if SUPABASE_KEY else SUPABASE_SERVICE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY if SUPABASE_KEY else SUPABASE_SERVICE_KEY}",
     "Content-Type": "application/json",
     "Prefer": "return=representation"
 })
 
 # Initialize Native AI Service SDKs
-client = Anthropic(api_key=anthropic_key if anthropic_key else "placeholder-key")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", "placeholder-key"))
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY if SUPABASE_SERVICE_KEY else SUPABASE_KEY)
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # =========================================================================
@@ -165,6 +178,7 @@ INSTRUCTIONS:
     except Exception as e:
         print(f"🚨 Chat execution level exception: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
 # =========================================================================
 # ROUTE 3: AUTOMATED VISION INVOICE DOCUMENT PARSER (Google Gemini Layer)
 # =========================================================================
@@ -243,6 +257,7 @@ def parse_invoice_webhook():
     except Exception as e:
         print(f"🚨 Document parser execution level exception: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
 # =========================================================================
 # PRODUCTION NETWORK BINDING ENGINE (Enables External Web Routing)
 # =========================================================================
