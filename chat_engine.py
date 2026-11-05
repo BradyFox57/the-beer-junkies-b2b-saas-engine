@@ -16,7 +16,6 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip('/')
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
-# Automated fallback fallback logic to prevent crash states if keys are mixed
 if not SUPABASE_SERVICE_KEY and SUPABASE_KEY:
     SUPABASE_SERVICE_KEY = SUPABASE_KEY
 
@@ -25,10 +24,6 @@ print(f"\n⚙️ CRITICAL CONNECTOR INGESTION VERIFIER:")
 print(f"↳ SUPABASE_URL length: {len(SUPABASE_URL)} characters")
 print(f"↳ SUPABASE_KEY length: {len(SUPABASE_KEY)} characters")
 print(f"↳ SUPABASE_SERVICE_ROLE_KEY length: {len(SUPABASE_SERVICE_KEY)} characters")
-
-# Validate core configurations before initialization
-if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    print("❌ WARNING: Missing vital database credentials. API boot aborted.")
 
 # Establish a persistent connection pool with administrative bypass overrides
 db_session = requests.Session()
@@ -41,8 +36,17 @@ db_session.headers.update({
 
 # Initialize Native AI Service SDKs
 client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", "placeholder-key"))
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY if SUPABASE_SERVICE_KEY else SUPABASE_KEY)
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
+# Defensive instantiation block to catch key parsing length errors cleanly
+supabase = None
+try:
+    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    else:
+        print("❌ CRITICAL ERROR: Blocked initialization due to blank fields.")
+except Exception as init_err:
+    print(f"❌ SUPABASE SDK FAULT OVERRIDE: {str(init_err)}")
 
 # =========================================================================
 # ROUTE 1: PLATFORM HANDSHAKE / STATUS MONITOR
