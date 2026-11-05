@@ -243,7 +243,6 @@ def parse_invoice_webhook():
     except Exception as e:
         print(f"🚨 Document parser execution level exception: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
 # =========================================================================
 # PRODUCTION NETWORK BINDING ENGINE (Enables External Web Routing)
 # =========================================================================
