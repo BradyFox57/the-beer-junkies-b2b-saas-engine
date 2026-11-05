@@ -165,24 +165,23 @@ INSTRUCTIONS:
     except Exception as e:
         print(f"🚨 Chat execution level exception: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
 # =========================================================================
 # ROUTE 3: AUTOMATED VISION INVOICE DOCUMENT PARSER (Google Gemini Layer)
 # =========================================================================
 @app.route("/webhook/parse-invoice", methods=["POST"])
 def parse_invoice_webhook():
     """Downloads an invoice/recipe document file stream, parses it via Gemini Vision, and saves raw items into Supabase."""
-    payload = request.json or {}
-    file_url = payload.get("file_url")
-    brewery_id = payload.get("brewery_id", "00000000-0000-0000-0000-000000000000")
-    
-    print(f"\n📥 INCOMING DOCUMENT PARSE REQUEST INTERCEPTED!")
-    print(f"↳ Processing File: {file_url}")
-
-    if not file_url:
-        return jsonify({"error": "Missing payload: file_url"}), 400
-
     try:
+        payload = request.json or {}
+        file_url = payload.get("file_url")
+        brewery_id = payload.get("brewery_id", "00000000-0000-0000-0000-000000000000")
+        
+        print(f"\n📥 INCOMING DOCUMENT PARSE REQUEST INTERCEPTED!")
+        print(f"↳ Processing File: {file_url}")
+
+        if not file_url:
+            return jsonify({"error": "Missing payload: file_url"}), 400
+
         # Download document file stream from storage
         response = requests.get(file_url)
         response.raise_for_status()
@@ -207,49 +206,48 @@ def parse_invoice_webhook():
           {
             "ingredient_name": "String",
             "category": "Grain" or "Yeast" or "Hops" or "Adjunct",
-            "current_stock": Float,
-            "unit_cost": Float,
-            
-"unit_of_measure": "String"
-}
-]
-"""
-ai_response = model.generate_content([
-{"mime_type": mime_type, "data": document_bytes},
-system_prompt
-])
-raw_json = ai_response.text.strip().replace("json", "").replace("", "")
-extracted_ingredients = json.loads(raw_json)
-db_payload = []
-for item in extracted_ingredients:
-db_payload.append({
-"brewery_id": brewery_id,
-"ingredient_name": item["ingredient_name"],
-"category": item["category"],
-"current_stock": float(item["current_stock"]),
-"unit_cost": float(item["unit_cost"]),
-"unit_of_measure": item["unit_of_measure"]
-})
-if db_payload:
-# Multi-row relational bulk insertion utilizing the direct service client
-result = supabase.table("inventory_ingredients").insert(db_payload).execute()
-print(f"✅ Success! Bulk inserted {len(db_payload)} ingredient rows into Supabase.")
-return jsonify({"status": "success", "processed_records": len(db_payload)}), 200
-else:
-return jsonify({"status": "empty", "message": "No relevant data parsed"}), 200
-except Exception as e:
-print(f"🚨 Document parser execution level exception: {e}")
-return jsonify({"status": "error", "message": str(e)}), 500
+            "current_stock": 0.0,
+            "unit_cost": 0.0,
+            "unit_of_measure": "String"
+          }
+        ]
+        """
 
-=========================================================================
+        ai_response = model.generate_content([
+            {"mime_type": mime_type, "data": document_bytes},
+            system_prompt
+        ])
+        
+        raw_json = ai_response.text.strip().replace("```json", "").replace("```", "")
+        extracted_ingredients = json.loads(raw_json)
 
+        db_payload = []
+        for item in extracted_ingredients:
+            db_payload.append({
+                "brewery_id": brewery_id,
+                "ingredient_name": item["ingredient_name"],
+                "category": item["category"],
+                "current_stock": float(item["current_stock"]),
+                "unit_cost": float(item["unit_cost"]),
+                "unit_of_measure": item["unit_of_measure"]
+            })
 
-PRODUCTION NETWORK BINDING ENGINE (Enables External Web Routing)
+        if db_payload:
+            # Multi-row relational bulk insertion utilizing the direct service client
+            result = supabase.table("inventory_ingredients").insert(db_payload).execute()
+            print(f"✅ Success! Bulk inserted {len(db_payload)} ingredient rows into Supabase.")
+            return jsonify({"status": "success", "processed_records": len(db_payload)}), 200
+        else:
+            return jsonify({"status": "empty", "message": "No relevant data parsed"}), 200
 
+    except Exception as e:
+        print(f"🚨 Document parser execution level exception: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-=========================================================================
-
-if name == 'main':
-production_port = int(os.environ.get("PORT", 5000))
-print(f"\n🚀 UNIFIED JUNKIEANALYTICS CORE ENGINE RUNNING ON PORT {production_port}")
-app.run(host='0.0.0.0', port=production_port)
+# =========================================================================
+# PRODUCTION NETWORK BINDING ENGINE (Enables External Web Routing)
+# =========================================================================
+if __name__ == '__main__':
+    production_port = int(os.environ.get("PORT", 5000))
+    print(f"\n🚀 UNIFIED JUNKIEANALYTICS CORE ENGINE RUNNING ON PORT {production_port}")
+    app.run(host='0.0.0.0', port=production_port)
