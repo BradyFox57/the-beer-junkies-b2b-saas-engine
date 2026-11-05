@@ -3,15 +3,18 @@ import json
 import requests
 from flask import Flask, request, jsonify
 from anthropic import Anthropic
+from supabase import create_client, Client
+import google.generativeai as genai
 
-# Initialize Flask App Server Layer
+# =========================================================================
+# SYSTEM INITIALIZATION LAYER (Single Unified App Instance)
+# =========================================================================
 app = Flask(__name__)
 
-# =========================================================================
-# LIVE CLOUD HANDSHAKE LAYER (Native Production HTTP Strategy)
-# =========================================================================
+# Core Environment Ingestion
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip('/')
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_KEY)
 anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
 
 # Establish a persistent connection pool with administrative bypass overrides
@@ -23,21 +26,32 @@ db_session.headers.update({
     "Prefer": "return=representation"
 })
 
+# Initialize Native AI Service SDKs
 client = Anthropic(api_key=anthropic_key if anthropic_key else "placeholder-key")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
+# =========================================================================
+# ROUTE 1: PLATFORM HANDSHAKE / STATUS MONITOR
+# =========================================================================
 @app.route('/', methods=['GET'])
 def server_home():
     return jsonify({
         "status": "online",
-        "message": "JunkieAnalytics-OS Sales Velocity Engine Live",
-        "target_endpoint": "https://onrender.com"
+        "message": "JunkieAnalytics-OS Unified Engine Active",
+        "endpoints": {
+            "chat": "/ai-query",
+            "parser": "/webhook/parse-invoice"
+        }
     }), 200
 
+# =========================================================================
+# ROUTE 2: CHATBOT PREDICTIVE INFERENCE ENGINE (Anthropic Claude Layer)
+# =========================================================================
 @app.route('/ai-query', methods=['POST'])
 def handle_brewery_chat():
     """Dynamically pulls real-time database snapshots via PostgREST, executes Claude, and writes to Supabase."""
     try:
-        # 1. Parse incoming payload from the Make.com webhook link
         payload = request.json or {}
         row_id = payload.get('id')
         brewery_id = payload.get('brewery_id')
@@ -45,16 +59,13 @@ def handle_brewery_chat():
         retail_pint_price = float(payload.get("retail_pint_price", 7.00))
         target_margin_floor = float(payload.get("target_margin_floor", 0.92))
         
-        print(f"\n📥 INCOMING REQUEST INTERCEPTED!")
-        print(f"↳ Row ID parsed: '{row_id}' (Type: {type(row_id).__name__})")
-        print(f"↳ Brewery ID: '{brewery_id}'")
+        print(f"\n📥 INCOMING CHAT REQUEST INTERCEPTED!")
+        print(f"↳ Row ID: '{row_id}' | Brewery ID: '{brewery_id}'")
 
         if not user_query:
             return jsonify({"status": "ignored", "reason": "Empty user prompt text"}), 400
 
-        # =========================================================================
-        # REAL-TIME DYNAMIC DATA EXTRACTION 
-        # =========================================================================
+        # Real-time extraction via persistent connection pool
         inv_response = db_session.get(f"{SUPABASE_URL}/rest/v1/inventory_ingredients?select=*")
         inv_response.raise_for_status()
         raw_inv = inv_response.json()
@@ -89,12 +100,11 @@ def handle_brewery_chat():
         bom_response.raise_for_status()
         raw_bom = bom_response.json()
 
-        # FIXED: Mapped precisely to your clean column schema modifications
         inventory_context = ""
         for item in raw_inv:
             stk = item.get('current_stock') or item.get('current_stock_lbs') or item.get('on_hand_lbs', 0)
             cst = item.get('unit_cost') or item.get('unit_cost_per_lb') or item.get('cost_per_lb', 0)
-            uom = item.get('unit_of_measure', 'lbs')  # Dynamically adapts to your new column settings
+            uom = item.get('unit_of_measure', 'lbs')
             name = item.get('ingredient_name') or item.get('name', 'Unknown')
             inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} {uom} available @ ${cst}/{uom}\n"
 
@@ -106,9 +116,6 @@ def handle_brewery_chat():
             stage = bom.get('addition_stage') or bom.get('add_stage', 'Boil')
             bom_context += f"↳ Recipe Target: (ID: {bom.get('recipe_id')}) requires {req_wt} lbs of {ing_name} during '{stage}' stage\n"
 
-        # =========================================================================
-        # CONSTRUCT SYSTEM PROMPT & CALCULATE ALGORITHMIC MARGIN LIMITS
-        # =========================================================================
         rev_per_bbl = 248 * retail_pint_price
         max_cost_per_bbl = rev_per_bbl * (1.0 - target_margin_floor)
 
@@ -129,7 +136,6 @@ INSTRUCTIONS:
 - Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
 """
 
-        # 2. Run Claude 3.5 Sonnet processing pipeline
         message = client.messages.create(
             model="claude-sonnet-5-5",
             max_tokens=2500,
@@ -143,38 +149,107 @@ INSTRUCTIONS:
                 if hasattr(block, 'text') and block.text is not None:
                     ai_text_response += str(block.text)
 
-        print(f"📤 CLAUDE RESPONSE GENERATED! Length: {len(ai_text_response)} characters.")
-
-        # 3. Explicitly bypass RLS filters using service role headers to clear the cell write
-        url_endpoint = f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}"
-        print(f"⚙️ Attempting Supabase Patch to URL: {url_endpoint}")
+        print(f"📤 CLAUDE RESPONSE GENERATED! Patching record: {row_id}")
         
         update_response = db_session.patch(
-            url_endpoint,
-            json={"ai_response": ai_text_response},
-            headers={
-                "apikey": SUPABASE_KEY,
-                "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Prefer": "return=representation"
-            }
+            f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}",
+            json={"ai_response": ai_text_response}
         )
-        
-        print(f"📬 Supabase Response Status Code: {update_response.status_code}")
-        print(f"📬 Supabase Response Body: {update_response.text}")
         update_response.raise_for_status()
 
-        print(f"✅ SYSTEM LOOP COMPLETE. Row {row_id} updated successfully.")
         return jsonify({
             "status": "success", 
-            "message": "Supabase row updated dynamically",
             "ai_response": ai_text_response
         }), 200
 
     except Exception as e:
-        print(f"🚨 Execution layer exception inside network listener: {e}")
+        print(f"🚨 Chat execution level exception: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-if __name__ == '__main__':
-    production_port = int(os.environ.get("PORT", 5000))
-    print(f"\n🚀 JUNKIEANALYTICS ENGINE STARTING ON PORT {production_port}")
-    app.run(host='0.0.0.0', port=production_port)
+# =========================================================================
+# ROUTE 3: AUTOMATED VISION INVOICE DOCUMENT PARSER (Google Gemini Layer)
+# =========================================================================
+@app.route("/webhook/parse-invoice", methods=["POST"])
+def parse_invoice_webhook():
+    """Downloads an invoice/recipe document file stream, parses it via Gemini Vision, and saves raw items into Supabase."""
+    payload = request.json or {}
+    file_url = payload.get("file_url")
+    brewery_id = payload.get("brewery_id", "00000000-0000-0000-0000-000000000000")
+    
+    print(f"\n📥 INCOMING DOCUMENT PARSE REQUEST INTERCEPTED!")
+    print(f"↳ Processing File: {file_url}")
+
+    if not file_url:
+        return jsonify({"error": "Missing payload: file_url"}), 400
+
+    try:
+        # Download document file stream from storage
+        response = requests.get(file_url)
+        response.raise_for_status()
+        document_bytes = response.content
+
+        mime_type = "application/pdf" if ".pdf" in file_url.lower() else "image/jpeg"
+
+        # Initialize native Vision Engine
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+        
+        system_prompt = """
+        You are an expert data parsing service for craft breweries. Read the text, line items, and quantities from the attached document.
+        Identify if this is a Supplier Sales Order/Invoice or a BeerSmith recipe file. Extract all relevant raw ingredients.
+        
+        Rules for values:
+        - For Country Malt Group: Clean item descriptions (e.g., 'Bestmalz Biscuit Malt'). Calculate total units by multiplying 'Qty Ordered' by the package sizing (e.g., 4 bags of 55LB = 220). Extract total raw numeric values without appending letters. Set unit_of_measure to 'lbs', 'gal', or 'ea' based on context.
+        - For White Labs Yeast: Extract 'ea' items. Set quantity as the ordered units, and unit_cost as the baseline unit price.
+        - For BeerSmith Recipes: Extract 'Amt' as current_stock and the 'Name' as ingredient_name. Clean units out of the quantity (e.g., convert '8 lbs' to 8.0) and track the unit type in unit_of_measure ('lbs', 'oz', etc.). Set unit_cost to 0.0 if not listed.
+        
+        Return ONLY a clean JSON array matching this exact structural format:
+        [
+          {
+            "ingredient_name": "String",
+            "category": "Grain" or "Yeast" or "Hops" or "Adjunct",
+            "current_stock": Float,
+            "unit_cost": Float,
+            
+"unit_of_measure": "String"
+}
+]
+"""
+ai_response = model.generate_content([
+{"mime_type": mime_type, "data": document_bytes},
+system_prompt
+])
+raw_json = ai_response.text.strip().replace("json", "").replace("", "")
+extracted_ingredients = json.loads(raw_json)
+db_payload = []
+for item in extracted_ingredients:
+db_payload.append({
+"brewery_id": brewery_id,
+"ingredient_name": item["ingredient_name"],
+"category": item["category"],
+"current_stock": float(item["current_stock"]),
+"unit_cost": float(item["unit_cost"]),
+"unit_of_measure": item["unit_of_measure"]
+})
+if db_payload:
+# Multi-row relational bulk insertion utilizing the direct service client
+result = supabase.table("inventory_ingredients").insert(db_payload).execute()
+print(f"✅ Success! Bulk inserted {len(db_payload)} ingredient rows into Supabase.")
+return jsonify({"status": "success", "processed_records": len(db_payload)}), 200
+else:
+return jsonify({"status": "empty", "message": "No relevant data parsed"}), 200
+except Exception as e:
+print(f"🚨 Document parser execution level exception: {e}")
+return jsonify({"status": "error", "message": str(e)}), 500
+
+=========================================================================
+
+
+PRODUCTION NETWORK BINDING ENGINE (Enables External Web Routing)
+
+
+=========================================================================
+
+if name == 'main':
+production_port = int(os.environ.get("PORT", 5000))
+print(f"\n🚀 UNIFIED JUNKIEANALYTICS CORE ENGINE RUNNING ON PORT {production_port}")
+app.run(host='0.0.0.0', port=production_port)
