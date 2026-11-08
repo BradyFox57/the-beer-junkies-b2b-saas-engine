@@ -176,28 +176,44 @@ INSTRUCTIONS:
             ]
         )
         
-                # Force a direct, multi-version string extraction fallback layer
+                               # Force a direct, multi-version string extraction fallback layer
         ai_text_response = ""
         if hasattr(message, 'content') and message.content:
             for block in message.content:
-                # Check for standard SDK block layouts
+                # 1. Cleanly trap raw metadata blocks and convert to standard text attributes
+                if hasattr(block, 'type') and getattr(block, 'type') in ['thinking', 'signature']:
+                    continue  # Safely bypass the internal processing signature tokens
+                
+                # 2. Extract standard content text strings
                 if hasattr(block, 'text') and block.text is not None:
                     ai_text_response += str(block.text)
-                # Check for raw dictionary/index chunks passed back by modern API calls
+                # 3. Check for raw dictionary/index chunks passed back by modern API calls
                 elif isinstance(block, dict) and "text" in block:
                     ai_text_response += str(block["text"])
-                # Safe global string conversion string fallback
+                # 4. Ultimate secure clean fallback conversion string
                 else:
-                    ai_text_response += str(block)
+                    block_str = str(block)
+                    if "text=" in block_str:
+                        # Extract the inner text string if it's trapped in a TextBlock wrapper
+                        try:
+                            start = block_str.find("text='") + 6
+                            end = block_str.find("', type=")
+                            if start > 5 and end > start:
+                                ai_text_response += block_str[start:end]
+                                continue
+                        except:
+                            pass
+                    ai_text_response += block_str
 
         # Remove potential empty text array wrappers
         ai_text_response = ai_text_response.strip()
 
         # Ultimate fallback mechanism: if the response parsed empty, populate a safety note
-        if not ai_text_response:
+        if not ai_text_response or len(ai_text_response) < 10:
             ai_text_response = "🤖 Predictive Engine Diagnostic: Database snapshot parsed successfully, but Claude generated an unnested token completion frame."
 
         print(f"📤 CLAUDE RESPONSE GENERATED! Length: {len(ai_text_response)} characters. Patching record: {row_id}")
+
 
         
         update_response = db_session.patch(
