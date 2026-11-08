@@ -153,7 +153,7 @@ INSTRUCTIONS:
 - Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
 """
 
-                # Force strict formatting compliance for Claude 5.5 models
+        # Reverted cleanly back to your native, working Sonnet 5.5 production string
         message = client.messages.create(
             model="claude-sonnet-5-5",
             max_tokens=2500,
@@ -175,46 +175,29 @@ INSTRUCTIONS:
                 }
             ]
         )
+
         
-                               # Force a direct, multi-version string extraction fallback layer
+        # Cleanly extract the native text response while bypassing raw thinking frames
         ai_text_response = ""
         if hasattr(message, 'content') and message.content:
             for block in message.content:
-                # 1. Cleanly trap raw metadata blocks and convert to standard text attributes
-                if hasattr(block, 'type') and getattr(block, 'type') in ['thinking', 'signature']:
-                    continue  # Safely bypass the internal processing signature tokens
+                # If it's a model reasoning chunk, let it process internally and continue
+                if hasattr(block, 'type') and getattr(block, 'type') == 'thinking':
+                    continue
                 
-                # 2. Extract standard content text strings
+                # Capture the actual text result string safely
                 if hasattr(block, 'text') and block.text is not None:
                     ai_text_response += str(block.text)
-                # 3. Check for raw dictionary/index chunks passed back by modern API calls
                 elif isinstance(block, dict) and "text" in block:
                     ai_text_response += str(block["text"])
-                # 4. Ultimate secure clean fallback conversion string
-                else:
-                    block_str = str(block)
-                    if "text=" in block_str:
-                        # Extract the inner text string if it's trapped in a TextBlock wrapper
-                        try:
-                            start = block_str.find("text='") + 6
-                            end = block_str.find("', type=")
-                            if start > 5 and end > start:
-                                ai_text_response += block_str[start:end]
-                                continue
-                        except:
-                            pass
-                    ai_text_response += block_str
 
-        # Remove potential empty text array wrappers
         ai_text_response = ai_text_response.strip()
 
-        # Ultimate fallback mechanism: if the response parsed empty, populate a safety note
-        if not ai_text_response or len(ai_text_response) < 10:
-            ai_text_response = "🤖 Predictive Engine Diagnostic: Database snapshot parsed successfully, but Claude generated an unnested token completion frame."
+        # Final protection layer to guarantee a return string
+        if not ai_text_response:
+            ai_text_response = "🤖 Predictive Engine Diagnostic: Database snapshot parsed successfully, but the model inference structure returned an unexpected format chunk."
 
         print(f"📤 CLAUDE RESPONSE GENERATED! Length: {len(ai_text_response)} characters. Patching record: {row_id}")
-
-
         
         update_response = db_session.patch(
             f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}",
