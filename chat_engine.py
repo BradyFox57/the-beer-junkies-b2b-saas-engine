@@ -184,7 +184,7 @@ INSTRUCTIONS:
 
         message = client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=2500,
+            max_tokens=8000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_query}],
         )
