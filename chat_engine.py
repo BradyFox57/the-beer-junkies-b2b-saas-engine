@@ -24,7 +24,7 @@ def clean_env(name):
 SUPABASE_URL = clean_env("SUPABASE_URL").rstrip("/")
 SERVICE_KEY = clean_env("SUPABASE_SERVICE_ROLE_KEY")
 CLAUDE_MODEL = clean_env("CLAUDE_MODEL")
-GEMINI_MODEL = clean_env("GEMINI_MODEL") or "gemini-2.5-flash"
+GEMINI_MODEL = clean_env("GEMINI_MODEL") or "gemini-3.8-flash"
 APP_SECRET = clean_env("APP_SHARED_SECRET")
 MAX_FILE_BYTES = 20 * 1024 * 1024
 
