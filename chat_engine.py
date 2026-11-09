@@ -4,6 +4,8 @@ import json
 import difflib
 import requests
 import anthropic
+import time
+from google.genai import errors as genai_errors
 from urllib.parse import urlparse, unquote
 from flask import Flask, request, jsonify
 from anthropic import Anthropic
@@ -25,6 +27,7 @@ SUPABASE_URL = clean_env("SUPABASE_URL").rstrip("/")
 SERVICE_KEY = clean_env("SUPABASE_SERVICE_ROLE_KEY")
 CLAUDE_MODEL = clean_env("CLAUDE_MODEL")
 GEMINI_MODEL = clean_env("GEMINI_MODEL") or "gemini-3.8-flash"
+GEMINI_FALLBACK = clean_env("GEMINI_FALLBACK_MODEL")
 APP_SECRET = clean_env("APP_SHARED_SECRET")
 MAX_FILE_BYTES = 20 * 1024 * 1024
 
@@ -304,21 +307,43 @@ EXISTING INVENTORY (id | name | unit):
 
 
 def gemini_extract(content_part, hint, inventory):
+    if gemini_client is None:
+        raise RuntimeError("GEMINI_API_KEY is not set in Render, so documents can't be scanned")
+
     inv_lines = "\n".join(f"{i['ingredient_id']} | {i.get('ingredient_name')} | {i.get('unit_of_measure') or 'lbs'}"
                           for i in inventory[:300])
     hint_line = f"The user says this document is a {hint}." if hint in ("invoice", "recipe") else ""
     prompt = EXTRACTION_PROMPT.replace("{HINT}", hint_line).replace("{INVENTORY}", inv_lines or "(none)")
-    if gemini_client is None:
-        raise RuntimeError("GEMINI_API_KEY is not set in Render, so documents can't be scanned")
-    # Images/PDFs arrive as raw bytes; wrap them for the new Google SDK
+
     if isinstance(content_part, dict):
         content_part = types.Part.from_bytes(data=content_part["data"], mime_type=content_part["mime_type"])
 
-    resp = gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[content_part, prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
-    )
+    models_to_try = [GEMINI_MODEL] + ([GEMINI_FALLBACK] if GEMINI_FALLBACK else [])
+    resp, last_err = None, None
+    for model_name in models_to_try:
+        for attempt in range(3):
+            try:
+                resp = gemini_client.models.generate_content(
+                    model=model_name,
+                    contents=[content_part, prompt],
+                    config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
+                )
+                print(f"🤖 Scanned with {model_name}")
+                break
+            except genai_errors.APIError as e:
+                last_err = e
+                if getattr(e, "code", None) not in (429, 500, 503):
+                    raise  # real errors (bad key, bad file) fail immediately
+                if attempt < 2:
+                    wait = 3 * (attempt + 1)
+                    print(f"⏳ {model_name} busy ({e.code}), retrying in {wait}s...")
+                    time.sleep(wait)
+        if resp is not None:
+            break
+
+    if resp is None:
+        raise RuntimeError(f"The scanning AI is busy right now. Please try again in a minute. ({last_err})")
+
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (resp.text or "").strip())
     data = json.loads(text)
     if isinstance(data, list):
