@@ -7,7 +7,8 @@ import anthropic
 from urllib.parse import urlparse, unquote
 from flask import Flask, request, jsonify
 from anthropic import Anthropic
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from defusedxml import ElementTree as ET
 
 # =========================================================================
@@ -48,7 +49,7 @@ if not SERVICE_KEY.startswith("sb_"):
     db.headers["Authorization"] = f"Bearer {SERVICE_KEY}"
 
 client = Anthropic(api_key=clean_env("ANTHROPIC_API_KEY"))
-genai.configure(api_key=clean_env("GEMINI_API_KEY"))
+gemini_client = genai.Client(api_key=clean_env("GEMINI_API_KEY"))
 
 
 # =========================================================================
@@ -305,10 +306,15 @@ def gemini_extract(content_part, hint, inventory):
                           for i in inventory[:300])
     hint_line = f"The user says this document is a {hint}." if hint in ("invoice", "recipe") else ""
     prompt = EXTRACTION_PROMPT.replace("{HINT}", hint_line).replace("{INVENTORY}", inv_lines or "(none)")
-    model = genai.GenerativeModel(model_name=GEMINI_MODEL)
-    resp = model.generate_content(
-        [content_part, prompt],
-        generation_config={"response_mime_type": "application/json", "temperature": 0},
+
+    # Images/PDFs arrive as raw bytes; wrap them for the new Google SDK
+    if isinstance(content_part, dict):
+        content_part = types.Part.from_bytes(data=content_part["data"], mime_type=content_part["mime_type"])
+
+    resp = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[content_part, prompt],
+        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
     )
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (resp.text or "").strip())
     data = json.loads(text)
