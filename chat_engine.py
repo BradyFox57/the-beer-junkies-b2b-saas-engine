@@ -49,7 +49,9 @@ if not SERVICE_KEY.startswith("sb_"):
     db.headers["Authorization"] = f"Bearer {SERVICE_KEY}"
 
 client = Anthropic(api_key=clean_env("ANTHROPIC_API_KEY"))
-gemini_client = genai.Client(api_key=clean_env("GEMINI_API_KEY"))
+GEMINI_KEY = clean_env("GEMINI_API_KEY")
+gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
+print(f"↳ GEMINI_API_KEY set: {bool(GEMINI_KEY)}")
 
 
 # =========================================================================
@@ -306,7 +308,8 @@ def gemini_extract(content_part, hint, inventory):
                           for i in inventory[:300])
     hint_line = f"The user says this document is a {hint}." if hint in ("invoice", "recipe") else ""
     prompt = EXTRACTION_PROMPT.replace("{HINT}", hint_line).replace("{INVENTORY}", inv_lines or "(none)")
-
+    if gemini_client is None:
+        raise RuntimeError("GEMINI_API_KEY is not set in Render, so documents can't be scanned")
     # Images/PDFs arrive as raw bytes; wrap them for the new Google SDK
     if isinstance(content_part, dict):
         content_part = types.Part.from_bytes(data=content_part["data"], mime_type=content_part["mime_type"])
