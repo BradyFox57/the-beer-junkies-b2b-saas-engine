@@ -153,7 +153,7 @@ INSTRUCTIONS:
 - Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
 """
 
-                # Force strict formatting compliance and bypass thinking frame loops
+        # Force strict formatting compliance on Sonnet 5.5 model layers
         message = client.messages.create(
             model="claude-sonnet-5-5",
             max_tokens=2500,
@@ -173,34 +173,47 @@ INSTRUCTIONS:
                         }
                     ]
                 }
-            ],
-            # CRUCIAL: Tells the API to return clean text instead of base64 reasoning frames
-            extra_headers={"anthropic-beta": "max-tokens-336k"}
+            ]
         )
 
 
+
         
-                               # Cleanly extract standard text streams from the content blocks
+         # Comprehensive text stream collection layer bypassing meta token structures
         ai_text_response = ""
         if hasattr(message, 'content') and message.content:
             for block in message.content:
-                # Bypass internal meta-processing blocks completely
+                # 1. Skip structural metadata thinking/signature frames entirely
                 if hasattr(block, 'type') and getattr(block, 'type') in ['thinking', 'signature', 'redacted_thinking']:
                     continue
                 
-                # Secure the primary text string asset
+                # 2. Extract string if block has a native text attribute
                 if hasattr(block, 'text') and block.text is not None:
                     ai_text_response += str(block.text)
+                
+                # 3. Check for nested dictionary format key
                 elif isinstance(block, dict) and "text" in block:
                     ai_text_response += str(block["text"])
 
         ai_text_response = ai_text_response.strip()
 
-        # Final protection layer to guarantee a return string for Supabase
+        # Ultimate fallback logic: if still empty, parse raw content envelopes directly
         if not ai_text_response or ai_text_response.lower() == "none":
-            ai_text_response = "🤖 Predictive Engine Diagnostic: Database snapshot parsed successfully, but the Claude runtime pipeline returned an empty block envelope."
+            # Force extract message content attributes if standard loops fall through
+            if hasattr(message, 'content') and len(message.content) > 0:
+                first_block = message.content[0]
+                if hasattr(first_block, 'text'):
+                    ai_text_response = str(first_block.text)
+                else:
+                    ai_text_response = str(first_block)
+            else:
+                ai_text_response = str(message.content)
+
+        # Final string sanity clean
+        ai_text_response = ai_text_response.strip()
 
         print(f"📤 CLAUDE RESPONSE GENERATED! Length: {len(ai_text_response)} characters. Patching record: {row_id}")
+
 
 
 
