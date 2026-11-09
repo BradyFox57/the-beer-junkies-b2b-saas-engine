@@ -1,275 +1,239 @@
 import os
 import json
 import requests
+import anthropic
 from flask import Flask, request, jsonify
 from anthropic import Anthropic
-from supabase import create_client, Client
+from supabase import create_client
 import google.generativeai as genai
 
 # =========================================================================
-# SYSTEM INITIALIZATION LAYER (Single Unified App Instance)
+# SYSTEM INITIALIZATION
 # =========================================================================
 app = Flask(__name__)
 
-# Core Environment Ingestion
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip('/')
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "").strip()
 
-if not SUPABASE_SERVICE_KEY and SUPABASE_KEY:
-    SUPABASE_SERVICE_KEY = SUPABASE_KEY
+print("\n⚙️ STARTUP CHECK:")
+print(f"↳ SUPABASE_URL length: {len(SUPABASE_URL)}")
+print(f"↳ SUPABASE_SERVICE_ROLE_KEY length: {len(SERVICE_KEY)}")
+print(f"↳ CLAUDE_MODEL: '{CLAUDE_MODEL}'")
 
-# SECURE CONSOLE DEBUGGING LABELS (Verifies lengths without exposing strings)
-print(f"\n⚙️ CRITICAL CONNECTOR INGESTION VERIFIER:")
-print(f"↳ SUPABASE_URL length: {len(SUPABASE_URL)} characters")
-print(f"↳ SUPABASE_KEY length: {len(SUPABASE_KEY)} characters")
-print(f"↳ SUPABASE_SERVICE_ROLE_KEY length: {len(SUPABASE_SERVICE_KEY)} characters")
+if not SUPABASE_URL or not SERVICE_KEY:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in your environment variables")
+if not CLAUDE_MODEL:
+    raise RuntimeError("CLAUDE_MODEL must be set in your environment variables")
 
-# Establish a persistent connection pool with administrative bypass overrides
+# Server-side code uses the SERVICE ROLE key (never put this key in FlutterFlow)
 db_session = requests.Session()
 db_session.headers.update({
-    "apiKey": SUPABASE_KEY if SUPABASE_KEY else SUPABASE_SERVICE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY if SUPABASE_KEY else SUPABASE_SERVICE_KEY}",
+    "apikey": SERVICE_KEY,
+    "Authorization": f"Bearer {SERVICE_KEY}",
     "Content-Type": "application/json",
-    "Prefer": "return=representation"
+    "Prefer": "return=representation",
 })
 
-# Initialize Native AI Service SDKs
-client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", "placeholder-key"))
+client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+supabase = create_client(SUPABASE_URL, SERVICE_KEY)
 
-# Defensive instantiation block to catch key parsing length errors cleanly
-supabase = None
-try:
-    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
-        supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    else:
-        print("❌ CRITICAL ERROR: Blocked initialization due to blank fields.")
-except Exception as init_err:
-    print(f"❌ SUPABASE SDK FAULT OVERRIDE: {str(init_err)}")
 
 # =========================================================================
-# ROUTE 1: PLATFORM HANDSHAKE / STATUS MONITOR
+# HELPER FUNCTIONS
 # =========================================================================
-@app.route('/', methods=['GET'])
+def sb_get(table, select="*", brewery_id=None):
+    """Read rows from a Supabase table. Raises a clear error if it fails."""
+    params = {"select": select}
+    if brewery_id:
+        params["brewery_id"] = f"eq.{brewery_id}"
+    r = db_session.get(f"{SUPABASE_URL}/rest/v1/{table}", params=params, timeout=15)
+    if not r.ok:
+        raise RuntimeError(f"Supabase GET {table} failed ({r.status_code}): {r.text}")
+    return r.json()
+
+
+def update_chat_row(row_id, fields):
+    """Update a chat_events row. Raises an error if no row was actually updated."""
+    r = db_session.patch(
+        f"{SUPABASE_URL}/rest/v1/chat_events",
+        params={"id": f"eq.{row_id}"},
+        json=fields,
+        timeout=15,
+    )
+    if not r.ok:
+        raise RuntimeError(f"Supabase PATCH failed ({r.status_code}): {r.text}")
+    if not r.json():
+        raise RuntimeError(f"PATCH matched 0 rows for id={row_id} (wrong id or RLS blocking)")
+
+
+# =========================================================================
+# ROUTE 1: STATUS CHECK
+# =========================================================================
+@app.route("/", methods=["GET"])
 def server_home():
     return jsonify({
         "status": "online",
         "message": "JunkieAnalytics-OS Unified Engine Active",
         "endpoints": {
             "chat": "/ai-query",
-            "parser": "/webhook/parse-invoice"
-        }
+            "parser": "/webhook/parse-invoice",
+        },
     }), 200
 
+
 # =========================================================================
-# ROUTE 2: CHATBOT PREDICTIVE INFERENCE ENGINE (Anthropic Claude Layer)
+# ROUTE 2: CHATBOT (Claude)
 # =========================================================================
-@app.route('/ai-query', methods=['POST'])
+@app.route("/ai-query", methods=["POST"])
 def handle_brewery_chat():
-    """Dynamically pulls real-time database snapshots via PostgREST, executes Claude, and writes to Supabase."""
+    payload = request.get_json(silent=True) or {}
+    record = payload.get("record", payload)  # handles Supabase webhook format AND flat format
+
+    row_id = record.get("id")
+    brewery_id = record.get("brewery_id")
+    user_query = (record.get("user_prompt") or "").strip()
+
+    print(f"\n📥 Chat request | keys={list(payload.keys())} | row_id={row_id} | brewery={brewery_id}")
+
+    if not row_id:
+        return jsonify({"status": "error", "message": "Missing id in payload"}), 400
+
+    # Loop guard: if this row already has an answer, don't overwrite it
+    if record.get("ai_response"):
+        return jsonify({"status": "ignored", "reason": "already answered"}), 200
+
+    if not user_query:
+        try:
+            update_chat_row(row_id, {"ai_response": "⚠️ Error: empty prompt"})
+        except Exception as write_err:
+            print(f"🚨 Could not write error to row: {write_err}")
+        return jsonify({"status": "error", "message": "Empty user prompt"}), 400
+
     try:
-        payload = request.json or {}
-        row_id = payload.get('id')
-        brewery_id = payload.get('brewery_id')
-        user_query = payload.get('user_prompt')
-        retail_pint_price = float(payload.get("retail_pint_price", 7.00))
-        target_margin_floor = float(payload.get("target_margin_floor", 0.92))
-        
-        print(f"\n📥 INCOMING CHAT REQUEST INTERCEPTED!")
-        print(f"↳ Row ID: '{row_id}' | Brewery ID: '{brewery_id}'")
+        retail_pint_price = float(record.get("retail_pint_price") or 7.00)
+        margin = float(record.get("target_margin_floor") or 0.92)
+        if margin > 1:
+            margin = margin / 100  # accepts 92 or 0.92
 
-        if not user_query:
-            return jsonify({"status": "ignored", "reason": "Empty user prompt text"}), 400
+        # Pull this brewery's data from Supabase
+        raw_inv = sb_get("inventory_ingredients", brewery_id=brewery_id)
+        raw_bom = sb_get(
+            "recipe_ingredients_bom",
+            select="*,inventory_ingredients(ingredient_name,category)",
+        )
 
-        # Real-time extraction via persistent connection pool
-        inv_response = db_session.get(f"{SUPABASE_URL}/rest/v1/inventory_ingredients?select=*")
-        inv_response.raise_for_status()
-        raw_inv = inv_response.json()
-        
-        sales_response = db_session.get(f"{SUPABASE_URL}/rest/v1/sales_velocity?select=product_name,quantity_sold")
-        sales_response.raise_for_status()
-        raw_sales = sales_response.json()
-        
-        velocity_tracker = {}
-        for record in raw_sales:
-            p_name = record.get("product_name")
-            qty = float(record.get("quantity_sold") or 0)
-            if p_name:
-                velocity_tracker[p_name] = velocity_tracker.get(p_name, 0) + qty
-        
-        top_product_name = max(velocity_tracker, key=velocity_tracker.get) if velocity_tracker else None
-
-        recipes_response = db_session.get(f"{SUPABASE_URL}/rest/v1/product_recipes?select=*")
-        recipes_response.raise_for_status()
-        raw_recipes = recipes_response.json()
-
-        top_recipe_id = None
-        if isinstance(raw_recipes, list) and len(raw_recipes) > 0:
-            for recipe in raw_recipes:
-                if top_product_name and top_product_name.lower() in recipe.get("name", "").lower():
-                    top_recipe_id = recipe.get("id") or recipe.get("recipe_id")
-                    break
-            if not top_recipe_id:
-                top_recipe_id = raw_recipes[0].get("id") or raw_recipes[0].get("recipe_id")
-
-        bom_response = db_session.get(f"{SUPABASE_URL}/rest/v1/recipe_ingredients_bom?select=*,inventory_ingredients(ingredient_name,category)")
-        bom_response.raise_for_status()
-        raw_bom = bom_response.json()
-
-        inventory_context = ""
+        inventory_lines = []
         for item in raw_inv:
-            stk = item.get('current_stock') or item.get('current_stock_lbs') or item.get('on_hand_lbs', 0)
-            cst = item.get('unit_cost') or item.get('unit_cost_per_lb') or item.get('cost_per_lb', 0)
-            uom = item.get('unit_of_measure', 'lbs')
-            name = item.get('ingredient_name') or item.get('name', 'Unknown')
-            inventory_context += f"- {name} ({item.get('category', 'Unknown')}): {stk} {uom} available @ ${cst}/{uom}\n"
+            stk = item.get("current_stock")
+            stk = stk if stk is not None else 0
+            cst = item.get("unit_cost")
+            cst = cst if cst is not None else 0
+            uom = item.get("unit_of_measure") or "lbs"
+            name = item.get("ingredient_name") or "Unknown"
+            cat = item.get("category") or "Unknown"
+            inventory_lines.append(f"- {name} ({cat}): {stk} {uom} available @ ${cst}/{uom}")
 
-        bom_context = ""
+        bom_lines = []
         for bom in raw_bom:
-            ing_info = bom.get('inventory_ingredients') or {}
-            ing_name = ing_info.get('ingredient_name') or ing_info.get('name') or 'Unknown Ingredient'
-            req_wt = bom.get('required_weight_lbs') or bom.get('weight_lbs', 0)
-            stage = bom.get('addition_stage') or bom.get('add_stage', 'Boil')
-            bom_context += f"↳ Recipe Target: (ID: {bom.get('recipe_id')}) requires {req_wt} lbs of {ing_name} during '{stage}' stage\n"
+            ing = bom.get("inventory_ingredients") or {}
+            bom_lines.append(
+                f"- Recipe {bom.get('recipe_id')}: {bom.get('required_weight_lbs') or 0} lbs of "
+                f"{ing.get('ingredient_name') or 'Unknown'} during '{bom.get('addition_stage') or 'Boil'}'"
+            )
 
-        rev_per_bbl = 248 * retail_pint_price
-        max_cost_per_bbl = rev_per_bbl * (1.0 - target_margin_floor)
+        rev_per_bbl = 248 * retail_pint_price  # 248 pints per BBL
+        max_cost_per_bbl = rev_per_bbl * (1.0 - margin)
 
-        dynamic_system_prompt = f"""
-You are the Unified Predictive Intelligence engine for JunkieAnalytics-OS.
-You protect an editable {target_margin_floor * 100}% gross margin floor.
+        inventory_text = "\n".join(inventory_lines) or "(no inventory records found)"
+        bom_text = "\n".join(bom_lines) or "(no BOM records found)"
 
-LIVE WAREHOUSE INVENTORY BALANCES:
-{inventory_context}
+        system_prompt = f"""You are the Unified Predictive Intelligence engine for JunkieAnalytics-OS.
+You protect a {margin * 100:.0f}% gross margin floor.
 
-CONFIGURED RECIPE BILL OF MATERIALS (BOM) REQUIREMENTS:
-{bom_context}
+LIVE WAREHOUSE INVENTORY:
+{inventory_text}
+
+RECIPE BILL OF MATERIALS:
+{bom_text}
 
 INSTRUCTIONS:
-- You must mathematically cross-reference the user's target recipe requirements against your live warehouse balances.
-- If the required weight for any ingredient exceeds the available stock balance, you MUST issue a definitive 'FAIL' analysis.
-- Proactively call out shortfalls down to the exact unit metric requested.
-- Generate optimized alternative recipe variants that strictly keep raw production costs below ${max_cost_per_bbl:.2f}/BBL by using what is on-hand.
+- Cross-reference recipe requirements against live inventory.
+- If any required weight exceeds available stock, issue a definitive 'FAIL' analysis.
+- Call out shortfalls down to the exact unit.
+- Suggest alternative recipe variants using on-hand stock that keep raw cost below ${max_cost_per_bbl:.2f}/BBL.
 """
 
-        # Force strict formatting compliance on Sonnet 5.5 model layers
         message = client.messages.create(
-            model="claude-sonnet-5-5",
+            model=CLAUDE_MODEL,
             max_tokens=2500,
-            system=[
-                {
-                    "type": "text",
-                    "text": dynamic_system_prompt
-                }
-            ],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": user_query
-                        }
-                    ]
-                }
-            ]
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_query}],
         )
 
+        # Only take the text blocks from Claude's reply
+        ai_text = "".join(b.text for b in message.content if b.type == "text").strip()
 
+        if not ai_text:
+            raise RuntimeError(f"Claude returned no text (stop_reason={message.stop_reason})")
+        if message.stop_reason == "max_tokens":
+            ai_text += "\n\n_[Response truncated — max tokens reached]_"
 
-        
-         # Comprehensive text stream collection layer bypassing meta token structures
-        ai_text_response = ""
-        if hasattr(message, 'content') and message.content:
-            for block in message.content:
-                # 1. Skip structural metadata thinking/signature frames entirely
-                if hasattr(block, 'type') and getattr(block, 'type') in ['thinking', 'signature', 'redacted_thinking']:
-                    continue
-                
-                # 2. Extract string if block has a native text attribute
-                if hasattr(block, 'text') and block.text is not None:
-                    ai_text_response += str(block.text)
-                
-                # 3. Check for nested dictionary format key
-                elif isinstance(block, dict) and "text" in block:
-                    ai_text_response += str(block["text"])
+        update_chat_row(row_id, {"ai_response": ai_text})
+        print(f"✅ Patched row {row_id} with {len(ai_text)} characters")
+        return jsonify({"status": "success", "ai_response": ai_text}), 200
 
-        ai_text_response = ai_text_response.strip()
-
-        # Ultimate fallback logic: if still empty, parse raw content envelopes directly
-        if not ai_text_response or ai_text_response.lower() == "none":
-            # Force extract message content attributes if standard loops fall through
-            if hasattr(message, 'content') and len(message.content) > 0:
-                first_block = message.content[0]
-                if hasattr(first_block, 'text'):
-                    ai_text_response = str(first_block.text)
-                else:
-                    ai_text_response = str(first_block)
-            else:
-                ai_text_response = str(message.content)
-
-        # Final string sanity clean
-        ai_text_response = ai_text_response.strip()
-
-        print(f"📤 CLAUDE RESPONSE GENERATED! Length: {len(ai_text_response)} characters. Patching record: {row_id}")
-
-
-
-
-        
-        update_response = db_session.patch(
-            f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}",
-            json={"ai_response": ai_text_response}
-        )
-        update_response.raise_for_status()
-
-        return jsonify({
-            "status": "success", 
-            "ai_response": ai_text_response
-        }), 200
-
+    except anthropic.APIStatusError as e:
+        err = f"⚠️ Claude API error {e.status_code}: {e.message}"
     except Exception as e:
-        print(f"🚨 Chat execution level exception: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        err = f"⚠️ Error: {type(e).__name__}: {e}"
+
+    # Write the error into the row so you can SEE it in Supabase/FlutterFlow
+    print(f"🚨 {err}")
+    try:
+        update_chat_row(row_id, {"ai_response": err})
+    except Exception as write_err:
+        print(f"🚨 Could not write error to row: {write_err}")
+    return jsonify({"status": "error", "message": err}), 500
+
 
 # =========================================================================
-# ROUTE 3: AUTOMATED VISION INVOICE DOCUMENT PARSER (Google Gemini Layer)
+# ROUTE 3: INVOICE / IMAGE PARSER (Gemini)
 # =========================================================================
 @app.route("/webhook/parse-invoice", methods=["POST"])
 def parse_invoice_webhook():
-    """Downloads an invoice/recipe document file stream, parses it via Gemini Vision, and saves raw items into Supabase."""
     try:
-        payload = request.json or {}
+        payload = request.get_json(silent=True) or {}
         file_url = payload.get("file_url")
-        brewery_id = payload.get("brewery_id", "00000000-0000-0000-0000-000000000000")
-        
-        print(f"\n📥 INCOMING DOCUMENT PARSE REQUEST INTERCEPTED!")
-        print(f"↳ Processing File: {file_url}")
+        brewery_id = payload.get("brewery_id")
+
+        print(f"\n📥 Parse request | file={file_url} | brewery={brewery_id}")
 
         if not file_url:
-            return jsonify({"error": "Missing payload: file_url"}), 400
+            return jsonify({"status": "error", "message": "Missing file_url"}), 400
+        if not brewery_id:
+            return jsonify({"status": "error", "message": "Missing brewery_id"}), 400
 
-        # Download document file stream from storage
-        response = requests.get(file_url)
+        # Download the file and use its real content type (handles PNG/HEIC from phones)
+        response = requests.get(file_url, timeout=30)
         response.raise_for_status()
-        document_bytes = response.content
+        mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+        if not mime_type or mime_type == "application/octet-stream":
+            mime_type = "application/pdf" if ".pdf" in file_url.lower() else "image/jpeg"
 
-        mime_type = "application/pdf" if ".pdf" in file_url.lower() else "image/jpeg"
-
-        # Initialize native Vision Engine
         model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-        
+
         system_prompt = """
         You are an expert data parsing service for craft breweries. Read the text, line items, and quantities from the attached document.
         Identify if this is a Supplier Sales Order/Invoice or a BeerSmith recipe file. Extract all relevant raw ingredients.
-        
+
         Rules for values:
         - For Country Malt Group: Clean item descriptions (e.g., 'Bestmalz Biscuit Malt'). Calculate total units by multiplying 'Qty Ordered' by the package sizing (e.g., 4 bags of 55LB = 220). Extract total raw numeric values without appending letters. Set unit_of_measure to 'lbs', 'gal', or 'ea' based on context.
         - For White Labs Yeast: Extract 'ea' items. Set quantity as the ordered units, and unit_cost as the baseline unit price.
         - For BeerSmith Recipes: Extract 'Amt' as current_stock and the 'Name' as ingredient_name. Clean units out of the quantity (e.g., convert '8 lbs' to 8.0) and track the unit type in unit_of_measure ('lbs', 'oz', etc.). Set unit_cost to 0.0 if not listed.
-        
-        Return ONLY a clean JSON array matching this exact structural format:
+
+        Return ONLY a JSON array in this format:
         [
           {
             "ingredient_name": "String",
@@ -281,41 +245,57 @@ def parse_invoice_webhook():
         ]
         """
 
-        ai_response = model.generate_content([
-            {"mime_type": mime_type, "data": document_bytes},
-            system_prompt
-        ])
-        
-        raw_json = ai_response.text.strip().replace("```json", "").replace("```", "")
-        extracted_ingredients = json.loads(raw_json)
+        ai_response = model.generate_content(
+            [{"mime_type": mime_type, "data": response.content}, system_prompt],
+            generation_config={"response_mime_type": "application/json"},
+        )
+
+        extracted = json.loads(ai_response.text)
+        if not isinstance(extracted, list):
+            raise ValueError(f"Expected a JSON array, got: {type(extracted).__name__}")
+
+        def to_float(value):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
 
         db_payload = []
-        for item in extracted_ingredients:
+        skipped = 0
+        for item in extracted:
+            name = (item.get("ingredient_name") or "").strip()
+            if not name:
+                skipped += 1
+                continue
             db_payload.append({
                 "brewery_id": brewery_id,
-                "ingredient_name": item["ingredient_name"],
-                "category": item["category"],
-                "current_stock": float(item["current_stock"]),
-                "unit_cost": float(item["unit_cost"]),
-                "unit_of_measure": item["unit_of_measure"]
+                "ingredient_name": name,
+                "category": item.get("category") or "Adjunct",
+                "current_stock": to_float(item.get("current_stock")),
+                "unit_cost": to_float(item.get("unit_cost")),
+                "unit_of_measure": item.get("unit_of_measure") or "lbs",
             })
 
-        if db_payload:
-            # Multi-row relational bulk insertion utilizing the direct service client
-            result = supabase.table("inventory_ingredients").insert(db_payload).execute()
-            print(f"✅ Success! Bulk inserted {len(db_payload)} ingredient rows into Supabase.")
-            return jsonify({"status": "success", "processed_records": len(db_payload)}), 200
-        else:
+        if not db_payload:
             return jsonify({"status": "empty", "message": "No relevant data parsed"}), 200
 
+        supabase.table("inventory_ingredients").insert(db_payload).execute()
+        print(f"✅ Inserted {len(db_payload)} rows ({skipped} skipped)")
+        return jsonify({
+            "status": "success",
+            "processed_records": len(db_payload),
+            "skipped": skipped,
+        }), 200
+
     except Exception as e:
-        print(f"🚨 Document parser execution level exception: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"🚨 Parser error: {type(e).__name__}: {e}")
+        return jsonify({"status": "error", "message": f"{type(e).__name__}: {e}"}), 500
+
 
 # =========================================================================
-# PRODUCTION NETWORK BINDING ENGINE (Enables External Web Routing)
+# LOCAL STARTUP (used when running on your own computer)
 # =========================================================================
-if __name__ == '__main__':
-    production_port = int(os.environ.get("PORT", 5000))
-    print(f"\n🚀 UNIFIED JUNKIEANALYTICS CORE ENGINE RUNNING ON PORT {production_port}")
-    app.run(host='0.0.0.0', port=production_port)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    print(f"\n🚀 JUNKIEANALYTICS ENGINE RUNNING ON PORT {port}")
+    app.run(host="0.0.0.0", port=port)
