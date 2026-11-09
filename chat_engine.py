@@ -177,7 +177,12 @@ INSTRUCTIONS:
         )
 
         
-                # Comprehensive multi-format payload extraction layer
+                        # DEEP DIAGNOSTIC VISIBILITY: Print exactly what Anthropic is handing us
+        print(f"\n🔬 ANTHROPIC OBJECT DIAGNOSTIC:")
+        print(f"↳ Raw message content type: {type(message.content)}")
+        print(f"↳ Raw message content payload: {str(message.content)}")
+
+        # Comprehensive multi-format payload extraction layer
         ai_text_response = ""
         if hasattr(message, 'content') and message.content:
             for block in message.content:
@@ -205,21 +210,21 @@ INSTRUCTIONS:
                                 continue
                         except:
                             pass
-                    # If it's a raw string list, append it directly
                     if not block_str.startswith('<') and not block_str.startswith('TextBlock'):
                         ai_text_response += block_str
 
-        # Clean string margins
         ai_text_response = ai_text_response.strip()
 
-        # Ultimate fallback logic: if still empty, extract raw content parts directly
-        if not ai_text_response:
-            try:
-                ai_text_response = str(message.content[0].text)
-            except:
+        # Catch if the text parsed out to the string word 'None' or empty
+        if not ai_text_response or ai_text_response.lower() == "none":
+            # Force extract whatever raw payload is inside the content envelope
+            if isinstance(message.content, list) and len(message.content) > 0:
+                ai_text_response = str(message.content[0])
+            else:
                 ai_text_response = str(message.content)
 
         print(f"📤 CLAUDE RESPONSE GENERATED! Length: {len(ai_text_response)} characters. Patching record: {row_id}")
+
 
         
         update_response = db_session.patch(
