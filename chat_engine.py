@@ -177,27 +177,50 @@ INSTRUCTIONS:
         )
 
         
-        # Cleanly extract the native text response while bypassing raw thinking frames
+                # Comprehensive multi-format payload extraction layer
         ai_text_response = ""
         if hasattr(message, 'content') and message.content:
             for block in message.content:
-                # If it's a model reasoning chunk, let it process internally and continue
+                # 1. Skip reasoning/thinking blocks completely
                 if hasattr(block, 'type') and getattr(block, 'type') == 'thinking':
                     continue
                 
-                # Capture the actual text result string safely
+                # 2. Extract string if block has a native text attribute
                 if hasattr(block, 'text') and block.text is not None:
                     ai_text_response += str(block.text)
+                
+                # 3. Check for nested dictionary format key
                 elif isinstance(block, dict) and "text" in block:
                     ai_text_response += str(block["text"])
+                
+                # 4. Deep fallback: Convert block to string and strip out the Anthropic wrapper text
+                else:
+                    block_str = str(block)
+                    if "text='" in block_str:
+                        try:
+                            start = block_str.find("text='") + 6
+                            end = block_str.find("', type=")
+                            if start > 5 and end > start:
+                                ai_text_response += block_str[start:end]
+                                continue
+                        except:
+                            pass
+                    # If it's a raw string list, append it directly
+                    if not block_str.startswith('<') and not block_str.startswith('TextBlock'):
+                        ai_text_response += block_str
 
+        # Clean string margins
         ai_text_response = ai_text_response.strip()
 
-        # Final protection layer to guarantee a return string
+        # Ultimate fallback logic: if still empty, extract raw content parts directly
         if not ai_text_response:
-            ai_text_response = "🤖 Predictive Engine Diagnostic: Database snapshot parsed successfully, but the model inference structure returned an unexpected format chunk."
+            try:
+                ai_text_response = str(message.content[0].text)
+            except:
+                ai_text_response = str(message.content)
 
         print(f"📤 CLAUDE RESPONSE GENERATED! Length: {len(ai_text_response)} characters. Patching record: {row_id}")
+
         
         update_response = db_session.patch(
             f"{SUPABASE_URL}/rest/v1/chat_events?id=eq.{row_id}",
