@@ -4,7 +4,6 @@ import requests
 import anthropic
 from flask import Flask, request, jsonify
 from anthropic import Anthropic
-from supabase import create_client
 import google.generativeai as genai
 
 # =========================================================================
@@ -12,13 +11,21 @@ import google.generativeai as genai
 # =========================================================================
 app = Flask(__name__)
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
-SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "").strip()
+
+def clean_env(name):
+    """Read an environment variable and strip accidental spaces/quotes."""
+    return os.environ.get(name, "").strip().strip('"').strip("'").strip()
+
+
+SUPABASE_URL = clean_env("SUPABASE_URL").rstrip("/")
+SERVICE_KEY = clean_env("SUPABASE_SERVICE_ROLE_KEY")
+CLAUDE_MODEL = clean_env("CLAUDE_MODEL")
+
+key_type = "new secret key (sb_secret_)" if SERVICE_KEY.startswith("sb_") else "legacy JWT key"
 
 print("\n⚙️ STARTUP CHECK:")
 print(f"↳ SUPABASE_URL length: {len(SUPABASE_URL)}")
-print(f"↳ SUPABASE_SERVICE_ROLE_KEY length: {len(SERVICE_KEY)}")
+print(f"↳ SUPABASE_SERVICE_ROLE_KEY length: {len(SERVICE_KEY)} ({key_type})")
 print(f"↳ CLAUDE_MODEL: '{CLAUDE_MODEL}'")
 
 if not SUPABASE_URL or not SERVICE_KEY:
@@ -26,18 +33,20 @@ if not SUPABASE_URL or not SERVICE_KEY:
 if not CLAUDE_MODEL:
     raise RuntimeError("CLAUDE_MODEL must be set in your environment variables")
 
-# Server-side code uses the SERVICE ROLE key (never put this key in FlutterFlow)
+# Server-side code uses the SERVICE ROLE / SECRET key (never put this key in FlutterFlow)
 db_session = requests.Session()
 db_session.headers.update({
     "apikey": SERVICE_KEY,
-    "Authorization": f"Bearer {SERVICE_KEY}",
     "Content-Type": "application/json",
     "Prefer": "return=representation",
 })
+# Legacy JWT keys also go in the Authorization header.
+# New sb_secret_ keys only go in the apikey header.
+if not SERVICE_KEY.startswith("sb_"):
+    db_session.headers["Authorization"] = f"Bearer {SERVICE_KEY}"
 
-client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-supabase = create_client(SUPABASE_URL, SERVICE_KEY)
+client = Anthropic(api_key=clean_env("ANTHROPIC_API_KEY"))
+genai.configure(api_key=clean_env("GEMINI_API_KEY"))
 
 
 # =========================================================================
@@ -51,6 +60,14 @@ def sb_get(table, select="*", brewery_id=None):
     r = db_session.get(f"{SUPABASE_URL}/rest/v1/{table}", params=params, timeout=15)
     if not r.ok:
         raise RuntimeError(f"Supabase GET {table} failed ({r.status_code}): {r.text}")
+    return r.json()
+
+
+def sb_insert(table, rows):
+    """Insert one or more rows into a Supabase table."""
+    r = db_session.post(f"{SUPABASE_URL}/rest/v1/{table}", json=rows, timeout=30)
+    if not r.ok:
+        raise RuntimeError(f"Supabase INSERT {table} failed ({r.status_code}): {r.text}")
     return r.json()
 
 
@@ -279,7 +296,7 @@ def parse_invoice_webhook():
         if not db_payload:
             return jsonify({"status": "empty", "message": "No relevant data parsed"}), 200
 
-        supabase.table("inventory_ingredients").insert(db_payload).execute()
+        sb_insert("inventory_ingredients", db_payload)
         print(f"✅ Inserted {len(db_payload)} rows ({skipped} skipped)")
         return jsonify({
             "status": "success",
