@@ -12,11 +12,14 @@ from anthropic import Anthropic
 from google import genai
 from google.genai import types
 from defusedxml import ElementTree as ET
+from flask_cors import CORS
+
 
 # =========================================================================
 # SETUP
 # =========================================================================
 app = Flask(__name__)
+CORS(app, resources={r"/documents/*": {"origins": "*"}}, allow_headers=["Content-Type", "X-App-Secret"])
 
 
 def clean_env(name):
