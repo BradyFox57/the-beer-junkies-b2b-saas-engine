@@ -131,7 +131,7 @@ TO_GAL = {"gal": 1.0, "L": 0.264172, "ml": 0.000264172, "bbl": 31.0}
 
 
 def norm_unit(u):
-    key = str(u or "").strip().lower().rstrip(".")
+    key = str(u or "").strip().strip("'\"").lower().rstrip(".")
     return UNIT_ALIASES.get(key, key) if key else None
 
 
