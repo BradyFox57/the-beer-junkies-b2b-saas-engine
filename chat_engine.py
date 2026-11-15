@@ -289,7 +289,8 @@ For invoices, each entry in "items":
  "unit_cost": 0, "line_total": 0, "matched_ingredient_id": null}
 Invoice rules:
 - quantity = total amount RECEIVED. Multiply package count by package size (4 bags x 55 LB = 220 lbs).
-  Use quantity shipped, not ordered. Skip backordered lines.
+  If the document shows a shipped/received quantity, use it and skip lines with 0 shipped.
+  If it is a sales order or has no shipped quantity column, use the quantity ordered.
 - unit_cost = price for ONE unit_of_measure (e.g. per lb). If priced per bag, divide by bag size. If unsure, line_total / quantity.
 - Skip freight, shipping, fuel surcharges, deposits, pallets, and taxes.
 - Clean names: remove SKU codes and package sizes; keep maltster and product (e.g. "Bestmalz Biscuit Malt").
