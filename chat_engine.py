@@ -13,6 +13,7 @@ from google import genai
 from google.genai import types
 from defusedxml import ElementTree as ET
 from flask_cors import CORS
+import threading
 
 
 # =========================================================================
@@ -548,32 +549,11 @@ INSTRUCTIONS:
 # =========================================================================
 # ROUTE: SCAN A DOCUMENT - called directly by FlutterFlow
 # =========================================================================
-@app.route("/documents/parse", methods=["POST"])
-def parse_document():
-    denied = unauthorized()
-    if denied:
-        return denied
-
-    p = request.get_json(silent=True) or {}
-    file_url = (p.get("file_url") or "").strip()
-    brewery_id = p.get("brewery_id")
-    hint = str(p.get("document_hint") or "").lower()
-
-    if not file_url or not brewery_id:
-        return jsonify({"status": "error", "message": "file_url and brewery_id are required"}), 400
-    if not file_url.startswith(f"{SUPABASE_URL}/storage/"):
-        return jsonify({"status": "error", "message": "Files must come from your Supabase Storage"}), 400
-
-    doc_id = None
+def process_document(doc_id, file_url, file_name, brewery_id, hint):
+    """Runs in the background. Saves results (or the error) to document_uploads."""
     try:
-        doc_id = sb_insert("document_uploads", {
-            "brewery_id": brewery_id, "file_url": file_url,
-            "file_name": p.get("file_name"), "status": "processing",
-        })[0]["id"]
-        print(f"\n📥 Parse | doc={doc_id} | {file_url}")
-
         data_bytes, ctype = download_file(file_url)
-        kind, mime = classify_file(p.get("file_name"), file_url, ctype, data_bytes)
+        kind, mime = classify_file(file_name, file_url, ctype, data_bytes)
         inventory = sb_get("inventory_ingredients",
                            "ingredient_id,ingredient_name,category,unit_of_measure,current_stock",
                            {"brewery_id": f"eq.{brewery_id}"})
@@ -627,18 +607,72 @@ def parse_document():
             "parsed_data": result,
         })
         print(f"✅ Parsed {doc_type} for doc {doc_id}")
-        return jsonify(result), 200
 
     except Exception as e:
         msg = f"{type(e).__name__}: {e}"
-        print(f"🚨 Parse error: {msg}")
-        if doc_id:
-            try:
-                sb_patch("document_uploads", {"id": f"eq.{doc_id}"}, {"status": "error", "error_message": msg})
-            except Exception:
-                pass
-        return jsonify({"status": "error", "document_id": doc_id, "message": msg}), 500
+        print(f"🚨 Parse error for doc {doc_id}: {msg}")
+        try:
+            sb_patch("document_uploads", {"id": f"eq.{doc_id}"}, {"status": "error", "error_message": msg})
+        except Exception:
+            pass
 
+
+@app.route("/documents/parse", methods=["POST"])
+def parse_document():
+    denied = unauthorized()
+    if denied:
+        return denied
+
+    p = request.get_json(silent=True) or {}
+    file_url = (p.get("file_url") or "").strip()
+    brewery_id = p.get("brewery_id")
+    hint = str(p.get("document_hint") or "").lower()
+
+    if not file_url or not brewery_id:
+        return jsonify({"status": "error", "message": "file_url and brewery_id are required"}), 400
+    if not file_url.startswith(f"{SUPABASE_URL}/storage/"):
+        return jsonify({"status": "error", "message": "Files must come from your Supabase Storage"}), 400
+
+    try:
+        doc_id = sb_insert("document_uploads", {
+            "brewery_id": brewery_id, "file_url": file_url,
+            "file_name": p.get("file_name"), "status": "processing",
+        })[0]["id"]
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"{type(e).__name__}: {e}"}), 500
+
+    print(f"\n📥 Parse | doc={doc_id} | {file_url}")
+    threading.Thread(target=process_document,
+                     args=(doc_id, file_url, p.get("file_name"), brewery_id, hint),
+                     daemon=True).start()
+    return jsonify({"status": "processing", "document_id": doc_id}), 200
+
+
+@app.route("/documents/status", methods=["GET"])
+def document_status():
+    denied = unauthorized()
+    if denied:
+        return denied
+
+    doc_id = request.args.get("document_id")
+    brewery_id = request.args.get("brewery_id")
+    if not doc_id or not brewery_id:
+        return jsonify({"status": "error", "message": "document_id and brewery_id are required"}), 400
+
+    try:
+        rows = sb_get("document_uploads", "status,parsed_data,error_message",
+                      {"id": f"eq.{doc_id}", "brewery_id": f"eq.{brewery_id}"})
+    except Exception as e:
+        return jsonify({"status": "processing", "document_id": doc_id, "message": str(e)}), 200
+
+    if not rows:
+        return jsonify({"status": "error", "message": "Upload not found"}), 200
+    row = rows[0]
+    if row["status"] == "pending_review":
+        return jsonify(row["parsed_data"]), 200  # same data as before, with status "success"
+    if row["status"] == "error":
+        return jsonify({"status": "error", "document_id": doc_id, "message": row.get("error_message")}), 200
+    return jsonify({"status": row["status"], "document_id": doc_id}), 200
 
 # =========================================================================
 # ROUTE: CONFIRM AN INVOICE - called by the popup's Approve button
