@@ -658,7 +658,7 @@ def document_status():
     brewery_id = request.args.get("brewery_id")
     if not doc_id or not brewery_id:
         return jsonify({"status": "error", "message": "document_id and brewery_id are required"}), 400
-uuid_pattern = r"[0-9a-fA-F-]{36}"
+    uuid_pattern = r"[0-9a-fA-F-]{36}"
     if not re.fullmatch(uuid_pattern, str(doc_id)) or not re.fullmatch(uuid_pattern, str(brewery_id)):
         return jsonify({"status": "error", "message": f"Invalid IDs sent: {doc_id} / {brewery_id}"}), 200
     try:
@@ -742,9 +742,7 @@ def commit_recipe():
     doc_id, brewery_id, recipe = p.get("document_id"), p.get("brewery_id"), p.get("recipe")
     if not doc_id or not brewery_id or not isinstance(recipe, dict):
         return jsonify({"status": "error", "message": "document_id, brewery_id and recipe are required"}), 400
-    uuid_pattern = r"[0-9a-fA-F-]{36}"
-    if not re.fullmatch(uuid_pattern, str(doc_id)) or not re.fullmatch(uuid_pattern, str(brewery_id)):
-        return jsonify({"status": "error", "message": f"Invalid IDs sent: {doc_id} / {brewery_id}"}), 200
+    
     try:
         ings = []
         for it in recipe.get("ingredients") or []:
