@@ -3,7 +3,7 @@ import requests
 from datetime import datetime, timezone
 
 # 1. Target your live Make.com automation canvas webhook listener
-MAKE_WEBHOOK_URL = "https://hook.us2.make.com/go4wyxp0qagpqagut0vbrbc9rjs5cepb"
+MAKE_WEBHOOK_URL = "https://make.com/"
 
 # 2. Construct a simulated tokenized Square transaction entry for your taproom
 mock_square_transaction = {
